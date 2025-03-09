@@ -1,0 +1,257 @@
+import discord
+from discord.ext import commands
+from discord import app_commands
+from collections import deque
+from ..music_cog import MusicCog
+
+class CommandsCog(commands.Cog):
+    def __init__(self, bot: commands.Bot, music_cog: 'MusicCog'):
+        self.bot = bot
+        self.music_cog = music_cog  # Store a reference to the MusicCog
+        super().__init__()
+
+    @app_commands.command(name="move", description="Move a song to the front of the queue.")
+    @app_commands.describe(position="The position of the song in the queue (e.g., 1, 2, 3).")
+    async def move(self, interaction: discord.Interaction, position: int):
+        guild_id = str(interaction.guild_id)
+
+        if guild_id not in self.music_cog.song_queues or not self.music_cog.song_queues[guild_id]:
+            await interaction.response.send_message("The queue is empty.")
+            return
+
+        if position <= 0 or position > len(self.music_cog.song_queues[guild_id]):
+            await interaction.response.send_message("Invalid song position.")
+            return
+
+        song_list = list(self.music_cog.song_queues[guild_id])
+        moved_song = song_list.pop(position - 1)
+        song_list.insert(0, moved_song)
+        self.music_cog.song_queues[guild_id] = deque(song_list)
+
+        await interaction.response.send_message(
+            f"Moved '{moved_song[1]}' to the front of the queue."
+        )
+
+    @app_commands.command(name="queue", description="Show the current song queue.")
+    async def queue(self, interaction: discord.Interaction):
+        guild_id = str(interaction.guild_id)
+        if guild_id not in self.music_cog.song_queues or not self.music_cog.song_queues[guild_id]:
+            await interaction.response.send_message("The queue is empty.")
+            return
+
+        queue_list = "\n".join(
+            f"{i+1}. {title}" for i, (query, title) in enumerate(self.music_cog.song_queues[guild_id])
+        )
+        await interaction.response.send_message(f"**Current Queue:**\n{queue_list}")
+
+    @app_commands.command(name="volume", description="Set or get the playback volume.")
+    @app_commands.describe(volume="Volume level (0-100)")
+    async def volume(self, interaction: discord.Interaction, volume: int = None):
+        voice_client = interaction.guild.voice_client
+
+        if voice_client is None:
+            return await interaction.response.send_message("I'm not in a voice channel.")
+
+        guild_id = str(interaction.guild_id)
+
+        if volume is None:
+            current_volume = self.music_cog.volumes.get(guild_id, 1.0)
+            await interaction.response.send_message(f"Current volume: {int(current_volume * 100)}%")
+            return
+
+        if 0 <= volume <= 100:
+            volume_float = volume / 100.0
+            self.music_cog.volumes[guild_id] = volume_float
+
+            if voice_client.source:
+                voice_client.source.volume = volume_float
+
+            await interaction.response.send_message(f"Volume set to {volume}%")
+        else:
+            await interaction.response.send_message("Volume must be between 0 and 100.")
+
+    @app_commands.command(name="skip", description="Skips the current playing song")
+    async def skip(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client
+        if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
+            voice_client.stop()
+            await interaction.response.send_message("Skipped the current song.")
+        else:
+            await interaction.response.send_message("Not playing anything to skip.")
+
+    @app_commands.command(name="pause", description="Pause the currently playing song.")
+    async def pause(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client
+
+        if voice_client is None:
+            return await interaction.response.send_message("I'm not in a voice channel.")
+
+        if not voice_client.is_playing():
+            return await interaction.response.send_message("Nothing is currently playing.")
+
+        voice_client.pause()
+        await interaction.response.send_message("Playback paused!")
+
+    @app_commands.command(name="resume", description="Resume the currently paused song.")
+    async def resume(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client
+
+        if voice_client is None:
+            return await interaction.response.send_message("I'm not in a voice channel.")
+
+        if not voice_client.is_paused():
+            return await interaction.response.send_message("I'm not paused right now.")
+
+        voice_client.resume()
+        await interaction.response.send_message("Playback resumed!")
+
+    @app_commands.command(name="stop", description="Stop playback and clear the queue.")
+    async def stop(self, interaction: discord.Interaction):
+        voice_client = interaction.guild.voice_client
+        guild_id = str(interaction.guild_id)
+
+        if not voice_client or not voice_client.is_connected():
+            await interaction.response.send_message("I'm not connected to any voice channel.")
+            return
+
+        if guild_id in self.music_cog.song_queues:
+            self.music_cog.song_queues[guild_id].clear()
+
+        if voice_client.is_playing() or voice_client.is_paused():
+            voice_client.stop()
+        await interaction.response.defer()
+        await voice_client.disconnect()
+        await interaction.followup.send("Stopped playback and disconnected!")
+        
+    @app_commands.command(name="play", description="Play a song (searches YouTube).")
+    @app_commands.describe(song_query="Search query or URL")
+    async def play(self, interaction: discord.Interaction, song_query: str):
+        await interaction.response.defer()
+
+        voice_channel = interaction.user.voice
+        if voice_channel is None:
+            await interaction.followup.send("You must be in a voice channel.")
+            return
+        voice_channel = voice_channel.channel
+
+        voice_client = interaction.guild.voice_client
+
+        if voice_client is None:
+            voice_client = await voice_channel.connect()
+        elif voice_channel != voice_client.channel:
+            await voice_client.move_to(voice_channel)
+
+        if not song_query.startswith("http"):
+            song_query = f"ytsearch:{song_query}"
+
+        ydl_opts_play = {
+            'format': 'bestaudio/best',
+            'default_search': 'ytsearch',
+            'extract_flat': True,
+            'playlist_items': '1',
+            'noplaylist': False,
+            'quiet': True,
+            'no_warnings': True,
+        }
+
+        try:
+            results = await self.music_cog.search_ytdlp_async(song_query, ydl_opts_play)
+
+            if results.get('_type') == 'playlist':
+                first_track = results['entries'][0]
+                title = first_track.get('title', "Untitled")
+                original_query = results.get('webpage_url', song_query)
+                await interaction.followup.send(
+                    f"**{title}** Added to the queue"
+                )
+
+            elif 'entries' in results:
+                first_track = results['entries'][0]
+                title = first_track.get('title', "Untitled")
+                original_query = first_track.get('webpage_url', song_query)
+
+            elif 'url' in results:
+                title = results.get('title', "Untitled")
+                original_query = results.get('webpage_url', song_query)
+
+            else:
+                await interaction.followup.send("No results found.")
+                return
+
+            if not original_query:
+                await interaction.followup.send("Could not retrieve a playable URL for this song.")
+                return
+
+        except Exception as e:
+            print(f"Error during yt_dlp extraction: {e}")
+            await interaction.followup.send("An error occurred while searching for the song.")
+            return
+
+        guild_id = str(interaction.guild_id)
+        if guild_id not in self.music_cog.song_queues:
+            self.music_cog.song_queues[guild_id] = deque()
+
+        if voice_client.is_playing() or voice_client.is_paused():
+            self.music_cog.song_queues[guild_id].append((original_query, title))
+            await interaction.followup.send(f"Added to queue: **{title}**")
+        else:
+            self.music_cog.song_queues[guild_id].append((original_query, title))
+            await self.music_cog.play_next_song(guild_id, interaction)
+
+
+    @app_commands.command(name="playlist", description="Enqueue an entire playlist.")
+    @app_commands.describe(playlist_url="The URL of the YouTube playlist")
+    async def play_playlist(self, interaction: discord.Interaction, playlist_url: str):
+        await interaction.response.defer()
+
+        voice_channel = interaction.user.voice
+        if voice_channel is None:
+            await interaction.followup.send("You must be in a voice channel.")
+            return
+        voice_channel = voice_channel.channel
+
+        voice_client = interaction.guild.voice_client
+        if voice_client is None:
+            voice_client = await voice_channel.connect()
+        elif voice_channel != voice_client.channel:
+            await voice_client.move_to(voice_channel)
+
+
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'extract_flat': 'in_playlist',  # Get all playlist entries
+            'noplaylist': False,  # Allow playlists.
+            'quiet': True,
+            'no_warnings': True,
+        }
+
+        try:
+            results = await self.music_cog.search_ytdlp_async(playlist_url, ydl_opts)
+
+            if results.get('_type') == 'playlist':
+                guild_id = str(interaction.guild_id)
+                if guild_id not in self.music_cog.song_queues:
+                    self.music_cog.song_queues[guild_id] = deque()
+
+                added_count = 0
+                for entry in results['entries']:
+                    if entry:  # Check if entry is valid
+                        title = entry.get('title', 'Untitled')
+                        original_query = entry.get('url', playlist_url)  # Use URL as original query
+                        self.music_cog.song_queues[guild_id].append((original_query, title))
+                        added_count += 1
+
+                await interaction.followup.send(f"Added {added_count} songs from the playlist '{results['title']}' to the queue.")
+                # Start playing if not already playing
+                if not voice_client.is_playing():
+                    await self.music_cog.play_next_song(guild_id, interaction)
+
+            else:
+                await interaction.followup.send("This doesn't seem to be a valid playlist.")
+        except Exception as e:
+            print(f"Error during playlist extraction: {e}")
+            await interaction.followup.send("An error occurred while processing the playlist.")
+
+async def setup(bot: commands.Bot, music_cog: 'MusicCog'):
+    await bot.add_cog(CommandsCog(bot, music_cog))
+    print("CommandsCog loaded!")
