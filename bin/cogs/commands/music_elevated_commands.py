@@ -165,7 +165,11 @@ class ElevatedMusicCommands(commands.Cog):
 
         await interaction.response.send_message("Queue shuffled!")
 
-@staticmethod
 async def setup(bot: commands.Bot, music_cog: 'MusicCog'):
+    if music_cog is None:
+        print("MusicCog not found. Adding ElevatedMusicCommands without core functionality.")
+        music_cog = MusicCog(bot)
+        return
+    
     await bot.add_cog(ElevatedMusicCommands(bot, music_cog))
     print("Admin Music Controls Added")
