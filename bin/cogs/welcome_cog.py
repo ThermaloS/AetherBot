@@ -70,12 +70,16 @@ class Welcome(commands.Cog):
 
         welcome_channel = discord.utils.get(member.guild.text_channels, name=welcome_channel_name)
         role = discord.utils.get(member.guild.roles, name=welcome_role_name)
+        guild_name = member.guild.name
+
+        print(f"Welcome Channel Object: {welcome_channel}") # Debugging Line
+        print(f"Welcome Role Object: {role}") # Debugging Line
 
         if welcome_channel:
-            welcome_message = f"Welcome to the server, {member.mention}! We're glad to have you here!"
+            welcome_message = f"Welcome to the {guild_name}, {member.mention}!"
             
             embed = discord.Embed(
-                title=f"Welcome to the server, {member.mention}!",
+                title=f"Welcome to the {guild_name}, {member.name}!",
                 description="We're glad to have you here!",
                 color=discord.Color.green()
             )
@@ -87,7 +91,14 @@ class Welcome(commands.Cog):
                 default_avatar_url = "https://cdn.discordapp.com/embed/avatars/0.png"
                 embed.set_thumbnail(url=default_avatar_url)
 
-                await welcome_channel.send(welcome_message, embed=embed)
+            print(f"Attempting to send welcome message to channel: {welcome_channel.name} ({welcome_channel.id})") # Debugging Line
+            print(f"Welcome Message Content: {welcome_message}") # Debugging Line
+            print(f"Embed Title: {embed.title}, Embed Description: {embed.description}") # Debugging Line
+            try:
+                await welcome_channel.send(welcome_message, embed=embed) # Send the plain text message and then the embed
+                print("Welcome message sent successfully!") # Debugging Line
+            except Exception as e:
+                print(f"Error sending welcome message: {e}") # Debugging Line
 
         if role:
             try:
