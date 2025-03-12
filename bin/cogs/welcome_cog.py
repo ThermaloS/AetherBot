@@ -64,10 +64,16 @@ class Welcome(commands.Cog):
         welcome_channel_name = config.get("welcome_channel_name")
         welcome_role_name = config.get("welcome_role_name")
 
+        # Add some debugging info
+        print(f"Welcome Channel: {welcome_channel_name}")
+        print(f"Welcome Role: {welcome_role_name}")
+
         welcome_channel = discord.utils.get(member.guild.text_channels, name=welcome_channel_name)
         role = discord.utils.get(member.guild.roles, name=welcome_role_name)
 
         if welcome_channel:
+            welcome_message = f"Welcome to the server, {member.mention}! We're glad to have you here!"
+            
             embed = discord.Embed(
                 title=f"Welcome to the server, {member.mention}!",
                 description="We're glad to have you here!",
@@ -80,6 +86,8 @@ class Welcome(commands.Cog):
                 # Use Discord's Default Profile Picture
                 default_avatar_url = "https://cdn.discordapp.com/embed/avatars/0.png"
                 embed.set_thumbnail(url=default_avatar_url)
+
+                await welcome_channel.send(welcome_message, embed=embed)
 
         if role:
             try:
