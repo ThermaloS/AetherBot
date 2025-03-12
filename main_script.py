@@ -28,6 +28,7 @@ logger.addHandler(handler)
 # Environment Variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+print(f"Token being used: '{TOKEN}'")
 YOUR_GUILD_ID = os.getenv("YOUR_GUILD_ID")  # Not used in this example, but kept
 YOUR_WELCOME_CHANNEL_ID = os.getenv("YOUR_WELCOME_CHANNEL_ID")  # Not used here
 YOUR_ROLE_ID = os.getenv("YOUR_ROLE_ID")  # Not used here
