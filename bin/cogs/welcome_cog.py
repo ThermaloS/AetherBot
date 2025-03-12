@@ -79,8 +79,8 @@ class Welcome(commands.Cog):
             welcome_message = f"Welcome to the {guild_name}, {member.mention}!"
             
             embed = discord.Embed(
-                title=f"Welcome to the {guild_name}, {member.name}!",
-                description="We're glad to have you here!",
+                title=f"Welcome to the {guild_name}!",
+                description=f"We're glad to have you here, {member.mention}!",
                 color=discord.Color.green()
             )
             if member.avatar:
