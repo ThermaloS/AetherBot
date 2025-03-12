@@ -17,85 +17,6 @@ logger.setLevel(logging.INFO)
 handler = logging.StreamHandler()
 handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 logger.addHandler(handler)
-
-async def get_response(user_input: str, model, image_url=None, history=None) -> str:
-    """Gets AI response."""
-    logger.info("Entering get_response function")
-    lowered: str = user_input.lower()
-    if lowered == '':
-        return 'Well, you\'re awfully silent...'
-    elif 'hello' in lowered:
-        return 'Hello there!'
-    else:
-        personas = [
-            "You are a helpful and friendly chatbot on Discord.",
-            "You are a witty and sarcastic chatbot on Discord.",
-            "You are an enthusiastic and energetic chatbot on Discord.",
-            "You are a calm and informative chatbot on Discord.",
-        ]
-        chosen_persona = random.choice(personas)
-        prompt_instructions = "Respond to the following user input concisely.  Consider all parts of the conversation history equally."
-
-        full_prompt_content = ""
-        if history:
-            full_prompt_content += "Conversation History:\n"
-            for turn in history:
-                timestamp_str = turn['timestamp'].strftime("%Y-%m-%d %H:%M:%S UTC")
-                role_prefix = f"{turn['author']} ({timestamp_str}):"
-                content_text = turn['text']
-                turn_image_url = turn.get('image_url')
-
-                if turn_image_url:
-                    full_prompt_content += f"{role_prefix} [Image Attached] {content_text}\n"
-                else:
-                    full_prompt_content += f"{role_prefix} {content_text}\n"
-            full_prompt_content += "\n"
-
-        full_prompt_content += f"{chosen_persona} {prompt_instructions} User input: '{user_input}'"
-        if image_url:
-            full_prompt_content += f"\n\nThere is an image attached to this message. Please analyze the image and incorporate your analysis into your response."
-            logger.info(f"Image instruction added to prompt: {full_prompt_content}")
-
-        return await generate_gemini_response(full_prompt_content, model, image_url)
-
-async def generate_gemini_response(prompt: str, model, image_url: str = None) -> str:
-    """Generates response from Gemini API."""
-    logger.info("Entering generate_gemini_response function")
-    logger.info(f"Prompt to Gemini: {prompt}, Image URL: {image_url}")
-
-    content_parts: List[dict] = []
-    content_parts.append({"text": prompt})
-
-    if image_url:
-        try:
-            logger.info(f"Fetching image from URL: {image_url}")
-            image_response = requests.get(image_url, stream=True)
-            image_response.raise_for_status()
-            image_data = image_response.content
-            kind = filetype.guess(image_data)
-            if kind is None:
-                logger.warning("Could not determine image type. Defaulting to png.")
-                mime_type = "image/png"
-            else:
-                mime_type = kind.mime
-
-            content_parts.append({"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image_data).decode()}})
-            logger.info(f"Image fetched and added to content parts (type: {mime_type}).")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching image: {e}")
-            return "I couldn't download the image. Please check the link."
-        except Exception as e:
-            logger.exception(f"Unexpected error fetching/processing image: {e}")
-            return "An unexpected error occurred while processing the image."
-
-    try:
-        logger.info("Sending request to Gemini API...")
-        response = model.generate_content(contents=content_parts, generation_config=genai.types.GenerationConfig(max_output_tokens=200))
-        return response.text
-    except Exception as e:
-        logger.error(f"Error with Gemini API: {e}", exc_info=True)
-        return "I'm having trouble with Gemini right now. Try again later."
-
 class GeminiCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -224,6 +145,100 @@ class GeminiCog(commands.Cog):
             traceback.print_exc()
             await message.channel.send("Oops! Something went wrong...")
 
+async def get_response(user_input: str, model, image_url=None, history=None) -> str:
+    """Gets AI response."""
+    logger.info("Entering get_response function")
+    lowered: str = user_input.lower()
+    if lowered == '':
+        return 'Well, you\'re awfully silent...'
+    elif 'hello' in lowered:
+        return 'Hello there!'
+    else:
+        personas = [
+            "You are a helpful and friendly chatbot on Discord.",
+            "You are a witty and sarcastic chatbot on Discord.",
+            "You are an enthusiastic and energetic chatbot on Discord.",
+            "You are a calm and informative chatbot on Discord.",
+        ]
+        chosen_persona = random.choice(personas)
+        prompt_instructions = "Respond to the following user input concisely.  Consider all parts of the conversation history equally."
+
+        full_prompt_content = ""
+        if history:
+            full_prompt_content += "Conversation History:\n"
+            for turn in history:
+                timestamp_str = turn['timestamp'].strftime("%Y-%m-%d %H:%M:%S UTC")
+                role_prefix = f"{turn['author']} ({timestamp_str}):"
+                content_text = turn['text']
+                turn_image_url = turn.get('image_url')
+
+                if turn_image_url:
+                    full_prompt_content += f"{role_prefix} [Image Attached] {content_text}\n"
+                else:
+                    full_prompt_content += f"{role_prefix} {content_text}\n"
+            full_prompt_content += "\n"
+
+        full_prompt_content += f"{chosen_persona} {prompt_instructions} User input: '{user_input}'"
+        if image_url:
+            full_prompt_content += f"\n\nThere is an image attached to this message. Please analyze the image and incorporate your analysis into your response."
+            logger.info(f"Image instruction added to prompt: {full_prompt_content}")
+
+        return await generate_gemini_response(full_prompt_content, model, image_url)
+    pass
+
+async def generate_gemini_response(prompt: str, model, image_url: str = None) -> str:
+    """Generates response from Gemini API."""
+    logger.info("Entering generate_gemini_response function")
+    logger.info(f"Prompt to Gemini: {prompt}, Image URL: {image_url}")
+
+    content_parts: List[dict] = []
+    content_parts.append({"text": prompt})
+
+    if image_url:
+        try:
+            logger.info(f"Fetching image from URL: {image_url}")
+            image_response = requests.get(image_url, stream=True)
+            image_response.raise_for_status()
+            image_data = image_response.content
+            kind = filetype.guess(image_data)
+            if kind is None:
+                logger.warning("Could not determine image type. Defaulting to png.")
+                mime_type = "image/png"
+            else:
+                mime_type = kind.mime
+
+            content_parts.append({"inline_data": {"mime_type": mime_type, "data": base64.b64encode(image_data).decode()}})
+            logger.info(f"Image fetched and added to content parts (type: {mime_type}).")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching image: {e}")
+            return "I couldn't download the image. Please check the link."
+        except Exception as e:
+            logger.exception(f"Unexpected error fetching/processing image: {e}")
+            return "An unexpected error occurred while processing the image."
+
+    try:
+        logger.info("Sending request to Gemini API...")
+        response = model.generate_content(contents=content_parts, generation_config=genai.types.GenerationConfig(max_output_tokens=200))
+        return response.text
+    except Exception as e:
+        logger.error(f"Error with Gemini API: {e}", exc_info=True)
+        return "I'm having trouble with Gemini right now. Try again later."
+        pass
+
 async def setup(bot: commands.Bot):
-    await bot.add_cog(GeminiCog(bot))
-    print("Gemini Cog loaded!")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY not found in environment variables. Gemini Cog will not be loaded.")
+        return  # Exit the setup function without loading the cog
+
+    try:
+        # Only initialize and add the cog if the API key is present
+        await bot.add_cog(GeminiCog(bot))
+        print("Gemini Cog loaded!")
+    except ValueError as e:
+        print(f"Gemini Cog could not be loaded: {e}") # Catch the ValueError from GeminiCog init if it still occurs after checking above
+        print("Please ensure GEMINI_API_KEY is set correctly in your environment variables.")
+        return # Exit setup if there's a ValueError during cog initialization
+    except Exception as e:
+        print(f"An unexpected error occurred during Gemini Cog setup: {e}")
+        return # Exit setup if any other error occurs
