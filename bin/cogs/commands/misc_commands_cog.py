@@ -12,6 +12,14 @@ class ServerCog(commands.Cog):
                 "link": "https://discord.gg/qrKanm6dF7",
                 "display_name": "Grand Forks Spartans"
             },
+            "chicagotitans": {
+                "link": "https://discord.gg/uuDYQQPtNK",
+                "display_name": "Chicago Titans"
+            },
+            "sanantoniostallions": {
+                "link": "https://discord.gg/RYpmwVPS",
+                "display_name": "San Antonio Stallions"
+            }
             # Add more servers here
         }
 
