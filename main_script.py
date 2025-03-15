@@ -47,7 +47,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"{bot.user} is online!")
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Over your server!")) # Added Status to Bot
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="over your server!")) # Added Status to Bot
     print("on_ready event triggered.")  # Add this line
     try:
         print("Attempting to sync commands...") #add this line
