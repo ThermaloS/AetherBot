@@ -1,15 +1,15 @@
-# SpartanAI
+# Aether
 
 ## Overview
-SpartanAI is a Discord bot with a Music Bot, Welcome Bot, and Gemini AI bot built into one. I plan to expand on this bot when I have the time. This repository contains the source code and resources needed to run and understand the project.
+Aether is a Discord bot with a Music Bot, Welcome Bot, and Gemini AI bot built into one. I plan to expand on this bot when I have the time. This repository contains the source code and resources needed to run and understand the project.
 
 ## Getting Started
-To get started with SpartanAI, follow these steps:
+To get started with Aether, follow these steps:
 
 1. Clone the repository:
     ```
-    git clone https://github.com/ThermalOS/SpartanAI.git
-    cd SpartanAI
+    git clone https://github.com/ThermalOS/AetherBot.git
+    cd AetherBot
     ```
 
 2. Install the required dependencies:
