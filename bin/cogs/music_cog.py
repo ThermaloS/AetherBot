@@ -10,6 +10,7 @@ class MusicCog(commands.Cog):
     """A Discord bot cog for playing music from YouTube."""
     
     def __init__(self, bot: commands.Bot):
+        
         self.bot = bot
         self.song_queues: Dict[str, Deque[Tuple[str, str]]] = {}  # {guild_id: [(query, title), ...]}
         self.volumes: Dict[str, float] = {}  # {guild_id: volume}
@@ -172,10 +173,34 @@ class MusicCog(commands.Cog):
         # If queue is empty, check if RadioCog can provide more songs
         if not queue:
             print("Queue is empty, checking radio mode")
-            # Radio mode code remains the same...
+            
+            # Get the RadioCog instance if available
+            radio_cog = None
+            for cog in self.bot.cogs.values():
+                if cog.__class__.__name__ == "RadioCog":
+                    radio_cog = cog
+                    break
+            
+            # Check if radio mode is enabled and we have a last played song
+            if radio_cog and radio_cog.is_radio_enabled(int(guild_id)):
+                print("Radio mode is enabled, looking for similar songs")
+                last_played = self.get_last_played(guild_id)
+                
+                if last_played:
+                    original_query, title = last_played
+                    print(f"Using last played song for radio: {title} (query: {original_query})")
+                    
+                    # Call RadioCog's method to add similar songs based on the last played song
+                    similar_songs = await radio_cog.add_similar_songs_to_queue(original_query, int(guild_id), interaction.channel)
+                    
+                    # If we found similar songs, refresh our queue reference
+                    if similar_songs:
+                        queue = self.song_queues.get(guild_id, deque())
+                        print(f"Radio added {len(similar_songs)} songs, new queue length: {len(queue)}")
             
             # If queue is still empty, disconnect
             if not queue and voice_client.is_connected():
+                print("Queue still empty after radio check, disconnecting")
                 await voice_client.disconnect()
                 await interaction.channel.send("Queue finished, disconnecting.")
                 return
@@ -185,6 +210,7 @@ class MusicCog(commands.Cog):
         print(f"Popped song from queue: {title}")
         
         # Store as last played for radio mode reference
+        # IMPORTANT: We store the ORIGINAL query, not the processed URL
         self.last_played[guild_id] = (original_query, title)
         
         # Get playable URL with more detailed error handling
@@ -195,16 +221,47 @@ class MusicCog(commands.Cog):
                 print(f"Failed to get URL for {title}")
                 await interaction.channel.send(f"Failed to get playable URL for: {title}")
                 # Try the next song
-                asyncio.create_task(self.play_next_song(guild_id, interaction))
+                if queue:
+                    asyncio.create_task(self.play_next_song(guild_id, interaction))
                 return
             print(f"Successfully got URL for {title}")
+            
+            # Define the callback function for when the song finishes
+            def after_callback(error):
+                if error:
+                    print(f"Player error: {error}")
+                
+                # Schedule the next song to play
+                coro = self.play_next_song(guild_id, interaction)
+                fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+                try:
+                    fut.result()
+                except Exception as e:
+                    print(f"Error in after_callback: {e}")
+            
+            # Play the song
+            success = await self.play_audio(
+                voice_client, 
+                url, 
+                title,
+                guild_id, 
+                interaction.channel, 
+                after_callback
+            )
+            
+            if not success:
+                print(f"Failed to play {title}, trying next song")
+                # Try the next song
+                if queue:
+                    asyncio.create_task(self.play_next_song(guild_id, interaction))
+                
         except Exception as url_error:
             print(f"Error getting URL: {url_error}")
             await interaction.channel.send(f"Error retrieving playable URL: {url_error}")
-            asyncio.create_task(self.play_next_song(guild_id, interaction))
+            if queue:
+                asyncio.create_task(self.play_next_song(guild_id, interaction))
             return
-
-
+    
 async def setup(bot: commands.Bot):
     await bot.add_cog(MusicCog(bot))
     print("MusicCog loaded!")
