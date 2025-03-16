@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import json
+import os
 
 class Welcome(commands.Cog):
     def __init__(self, bot):
@@ -10,9 +11,16 @@ class Welcome(commands.Cog):
     def load_config(self):
         try:
             with open("server_config.json", "r") as f:
-                self.server_config = json.load(f)
+                file_content = f.read().strip()
+                if file_content:  # Check if the file has content
+                    self.server_config = json.loads(file_content)
+                else:
+                    # Handle empty file case
+                    self.server_config = {}
+                    self.save_config()  # Initialize with empty object
         except FileNotFoundError:
             self.server_config = {}
+            self.save_config()  # Create the file with empty object
 
     def save_config(self):
         with open("server_config.json", "w") as f:
