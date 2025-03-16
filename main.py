@@ -1,10 +1,12 @@
-# MAIN IMPORTS
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import os
 import asyncio
 import sys
+import logging
+import traceback
+from typing import Optional, Type, Any, Callable, Coroutine
 
 # UTILITY IMPORTS
 from bin.utils.config import BotConfig
@@ -66,51 +68,91 @@ async def on_command_error(ctx, error):
     else:
         await ctx.send(f"An error occurred: {error}")
 
+async def load_cog(
+    bot: commands.Bot, 
+    cog_class: Type[commands.Cog], 
+    *args: Any
+) -> Optional[commands.Cog]:
+    """
+    Load a cog with dependency injection.
+    
+    Args:
+        bot: The bot instance
+        cog_class: The cog class to instantiate
+        *args: Arguments to pass to the cog constructor
+    
+    Returns:
+        The loaded cog instance or None if loading failed
+    """
+    try:
+        cog_instance = cog_class(bot, *args)
+        await bot.add_cog(cog_instance)
+        logger.info(f"Loaded {cog_class.__name__}")
+        return cog_instance
+    except Exception as e:
+        logger.error(f"Error loading {cog_class.__name__}: {e}")
+        logger.debug(traceback.format_exc())
+        return None
+
 async def setup_cogs():
-    """Load all cogs."""
+    """Load all cogs with proper dependency injection."""
     logger.info("Setting up cogs...")
     
-    # Create MusicCog first as it's a dependency for other cogs
-    from bin.cogs.music.music_cog import MusicCog, setup as music_setup
-    music_cog = MusicCog(bot, config)
-    await music_setup(bot, config)
-    logger.info("Core MusicCog loaded")
+    # Import cog classes here to avoid circular imports
+    # Core services
+    from bin.services.youtube_service import YouTubeService
+    youtube_service = YouTubeService(config)
     
-    # Music-related cogs
+    # Music system
     try:
-        from bin.cogs.music.commands.music_general_controls import setup as general_controls_setup
-        from bin.cogs.music.commands.music_play_commands import setup as play_commands_setup
-        from bin.cogs.music.commands.music_elevated_commands import setup as elevated_commands_setup
-        from bin.cogs.music.radiocog import setup as radio_setup
+        from bin.cogs.music.music_cog import MusicCog
+        from bin.cogs.music.commands.music_general_controls import GeneralMusicControls
+        from bin.cogs.music.commands.music_play_commands import AddSongs
+        from bin.cogs.music.commands.music_elevated_commands import ElevatedMusicCommands
+        from bin.cogs.music.radiocog import RadioCog
         
-        await general_controls_setup(bot, music_cog)
-        await play_commands_setup(bot, music_cog)
-        await elevated_commands_setup(bot, music_cog)
-        await radio_setup(bot, music_cog, config)
-        logger.info("Music commands and RadioCog loaded")
+        # Load MusicCog first as a dependency for other music cogs
+        # Fix: Pass config as a parameter to MusicCog
+        music_cog = await load_cog(bot, MusicCog, config)
+        if not music_cog:
+            logger.error("Failed to load core MusicCog, skipping related music cogs")
+            return
+        
+        # Load music command cogs with MusicCog dependency
+        await load_cog(bot, GeneralMusicControls, music_cog)
+        await load_cog(bot, AddSongs, music_cog)
+        await load_cog(bot, ElevatedMusicCommands, music_cog)
+        
+        # Load RadioCog with dependencies
+        await load_cog(bot, RadioCog, music_cog, config)
+        
+        logger.info("Music system loaded successfully")
     except Exception as e:
-        logger.error(f"Error loading music cogs: {e}")
+        logger.error(f"Failed to set up music system: {e}")
+        logger.debug(traceback.format_exc())
     
-    # General bot cogs
+    # Utility and moderation cogs
     try:
-        from bin.cogs.moderation.welcome_cog import setup as welcome_setup
-        from bin.cogs.utility.misc_commands_cog import setup as server_setup
+        from bin.cogs.moderation.welcome_cog import Welcome
+        from bin.cogs.utility.misc_commands_cog import ServerCog
         
-        await welcome_setup(bot, config)
-        await server_setup(bot)
-        logger.info("General bot cogs loaded")
+        await load_cog(bot, Welcome)
+        await load_cog(bot, ServerCog)
+        
+        logger.info("Utility and moderation cogs loaded successfully")
     except Exception as e:
-        logger.error(f"Error loading general cogs: {e}")
+        logger.error(f"Failed to set up utility cogs: {e}")
+        logger.debug(traceback.format_exc())
     
-    # Gemini integration (optional)
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if gemini_api_key:
+    # Optional integrations
+    if os.getenv("GEMINI_API_KEY"):
         try:
-            from bin.services.gemini_cog import setup as gemini_setup
-            await gemini_setup(bot)
-            logger.info("Gemini cog loaded")
+            from bin.services.gemini_cog import GeminiCog
+            await load_cog(bot, GeminiCog)
+            logger.info("Gemini integration loaded successfully")
         except Exception as e:
-            logger.error(f"Error loading Gemini cog: {e}")
+            logger.error(f"Failed to set up Gemini integration: {e}")
+            logger.debug(traceback.format_exc())
     else:
         logger.warning("GEMINI_API_KEY not found. Gemini features will not be available.")
 
@@ -123,8 +165,11 @@ async def main():
         # Start the bot
         logger.info("Starting bot...")
         await bot.start(TOKEN)
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received")
     except Exception as e:
         logger.critical(f"Fatal error: {e}")
+        logger.debug(traceback.format_exc())
     finally:
         # Clean shutdown
         if not bot.is_closed():
