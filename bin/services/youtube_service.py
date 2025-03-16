@@ -97,15 +97,31 @@ class YouTubeService:
         exclude_urls = exclude_urls or []
         
         # Create search query based on available info
+        search_query = title
         if artist:
-            search_query = f"ytsearch{limit+5}:{artist} music -mix -compilation"
-        else:
-            search_query = f"ytsearch{limit+5}:{title} music similar -mix -compilation"
+            # If we have an artist, make sure to include it in the search
+            if artist not in search_query:
+                search_query = f"{artist} {search_query}"
+        
+        # Always add music-specific terms to focus on actual music content
+        if "music" not in search_query.lower():
+            search_query = f"{search_query} music"
             
-        logger.info(f"Searching for similar songs to: {title}")
+        # Add filter terms to exclude common non-music content
+        search_query = f"{search_query} -tutorial -how to -shorts"
+            
+        logger.info(f"Searching for similar songs to: {search_query}")
         
         try:
-            results = await self.extract_info_async(search_query)
+            # Use enhanced search query with 'EL:' for music filter
+            # This instructs YouTube to prefer music content
+            enhanced_query = f"ytsearch{limit+10}:EL:{search_query}"
+            
+            results = await self.extract_info_async(enhanced_query, {
+                'extract_flat': True,
+                'noplaylist': True,
+            })
+            
             if not results or 'entries' not in results:
                 return []
                 
@@ -118,6 +134,22 @@ class YouTubeService:
                 if len(filtered_results) >= limit:
                     break
                     
+                # Get more details for this entry to help with filtering
+                try:
+                    detailed_info = await self.extract_info_async(url, {
+                        'extract_flat': True,
+                        'skip_download': True,
+                        'noplaylist': True,
+                    })
+                    
+                    # Merge the detailed info with the entry
+                    if detailed_info:
+                        for key, value in detailed_info.items():
+                            if key not in entry or not entry[key]:
+                                entry[key] = value
+                except Exception as detail_error:
+                    logger.debug(f"Error getting details for {url}: {detail_error}")
+                
                 filtered_results.append(entry)
                 
             return filtered_results

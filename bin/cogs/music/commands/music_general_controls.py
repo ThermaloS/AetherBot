@@ -49,14 +49,24 @@ class GeneralMusicControls(commands.Cog):
         
         # Add current song if playing
         voice_client = interaction.guild.voice_client
-        if voice_client and voice_client.is_playing():
+        if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
             current_song = self.music_cog.get_last_played(guild_id)
             if current_song:
+                status = "⏸️ Paused" if voice_client.is_paused() else "▶️ Now Playing"
                 embed.add_field(
-                    name="🎵 Now Playing",
+                    name=status,
                     value=f"**{current_song[1]}**",
                     inline=False
                 )
+                
+                # Add link to Now Playing message if it exists
+                if guild_id in self.music_cog.now_playing_messages:
+                    channel, message = self.music_cog.now_playing_messages[guild_id]
+                    embed.add_field(
+                        name="📌 Now Playing Message",
+                        value=f"[View Current Song]({message.jump_url})",
+                        inline=False
+                    )
         
         # Add queued songs
         queue_text = ""
@@ -77,7 +87,7 @@ class GeneralMusicControls(commands.Cog):
             
         # Add footer with current volume
         volume = int(self.music_cog.get_guild_volume(guild_id) * 100)
-        embed.set_footer(text=f"Current Volume: {volume}%")
+        embed.set_footer(text=f"Current Volume: {volume}% | Use /nowplaying to pin the current song")
         
         await interaction.response.send_message(embed=embed)
 
@@ -85,6 +95,7 @@ class GeneralMusicControls(commands.Cog):
     async def pause(self, interaction: discord.Interaction):
         """Pause the current song playback."""
         voice_client = interaction.guild.voice_client
+        guild_id = str(interaction.guild_id)
 
         if voice_client is None:
             return await interaction.response.send_message("I'm not in a voice channel.")
@@ -96,12 +107,17 @@ class GeneralMusicControls(commands.Cog):
             return await interaction.response.send_message("Playback is already paused.")
 
         voice_client.pause()
+        
+        # Update the Now Playing message if it exists
+        await self.music_cog.update_playback_status(guild_id, "⏸️ Paused", discord.Color.gold())
+        
         await interaction.response.send_message("⏸️ Playback paused!")
 
     @app_commands.command(name="resume", description="Resume the currently paused song.")
     async def resume(self, interaction: discord.Interaction):
         """Resume playback of a paused song."""
         voice_client = interaction.guild.voice_client
+        guild_id = str(interaction.guild_id)
 
         if voice_client is None:
             return await interaction.response.send_message("I'm not in a voice channel.")
@@ -110,7 +126,51 @@ class GeneralMusicControls(commands.Cog):
             return await interaction.response.send_message("I'm not paused right now.")
 
         voice_client.resume()
+        
+        # Update the Now Playing message if it exists
+        await self.music_cog.update_playback_status(guild_id, "▶️ Playing", discord.Color.green())
+        
         await interaction.response.send_message("▶️ Playback resumed!")
+
+    @app_commands.command(name="nowplaying", description="Show what's currently playing and pin it")
+    async def now_playing(self, interaction: discord.Interaction):
+        """Display information about the currently playing song."""
+        guild_id = str(interaction.guild_id)
+        
+        # Check if music is playing
+        voice_client = interaction.guild.voice_client
+        if not voice_client or not (voice_client.is_playing() or voice_client.is_paused()):
+            await interaction.response.send_message("No music is currently playing.")
+            return
+            
+        # Get the last played song
+        last_played = self.music_cog.get_last_played(guild_id)
+        if not last_played:
+            await interaction.response.send_message("No song information available.")
+            return
+        
+        await interaction.response.defer()
+        
+        original_query, title = last_played
+        youtube_id = self.music_cog._extract_youtube_id(original_query)
+        thumbnail_url = f"https://img.youtube.com/vi/{youtube_id}/mqdefault.jpg" if youtube_id else None
+        
+        # Create or update the Now Playing message
+        if guild_id in self.music_cog.now_playing_messages:
+            channel, message = self.music_cog.now_playing_messages[guild_id]
+            status = "⏸️ Paused" if voice_client.is_paused() else "▶️ Playing"
+            color = discord.Color.gold() if voice_client.is_paused() else discord.Color.green()
+            await self.music_cog.update_now_playing_message(guild_id, title, thumbnail_url, status, color)
+            
+            # Reply with a link to the now playing message
+            await interaction.followup.send(f"**Now Playing**: {title}\n[View pinned Now Playing message]({message.jump_url})")
+        else:
+            # Create a new Now Playing message
+            message = await self.music_cog.create_now_playing_message(guild_id, interaction.channel, title, thumbnail_url)
+            if message:
+                await interaction.followup.send(f"**Now Playing**: {title}\n[View pinned Now Playing message]({message.jump_url})")
+            else:
+                await interaction.followup.send(f"**Now Playing**: {title}")
 
     @app_commands.command(name="voteskip", description="Vote to skip the current song.")
     async def voteskip(self, interaction: discord.Interaction):
@@ -131,6 +191,17 @@ class GeneralMusicControls(commands.Cog):
         # If only one person or empty, skip immediately
         if len(members_in_channel) <= 1:
             voice_client.stop()
+            
+            # Update the Now Playing message's status
+            if guild_id in self.music_cog.now_playing_messages:
+                channel, message = self.music_cog.now_playing_messages[guild_id]
+                embed = discord.Embed(
+                    title="Song Skipped",
+                    description="⏭️ Skipping to the next song...",
+                    color=discord.Color.blue()
+                )
+                await message.edit(embed=embed)
+                
             return await interaction.response.send_message("⏭️ Skipped the current song.")
             
         # Calculate required votes - majority of users
@@ -155,7 +226,8 @@ class GeneralMusicControls(commands.Cog):
             required_votes, 
             voice_channel, 
             voice_client, 
-            interaction.user.id
+            interaction.user.id,
+            self.music_cog  # Pass MusicCog for Now Playing updates
         )
         
         await interaction.response.send_message(embed=embed, view=view)
@@ -170,7 +242,8 @@ class VoteSkipView(discord.ui.View):
         required_votes: int, 
         voice_channel: discord.VoiceChannel, 
         voice_client: discord.VoiceClient, 
-        initiating_user_id: int
+        initiating_user_id: int,
+        music_cog: MusicCog
     ):
         """Initialize the vote skip view."""
         super().__init__(timeout=60)
@@ -179,6 +252,7 @@ class VoteSkipView(discord.ui.View):
         self.required_votes = required_votes
         self.voice_channel = voice_channel
         self.voice_client = voice_client
+        self.music_cog = music_cog
         self.yes_votes: Set[int] = {initiating_user_id}  # Add the user ID to the set
         self.no_votes: Set[int] = set()
         self.voters_in_channel: Set[int] = {m.id for m in voice_channel.members if not m.bot}
@@ -206,7 +280,19 @@ class VoteSkipView(discord.ui.View):
 
         if len(self.yes_votes) >= self.required_votes:
             if self.voice_client and self.voice_client.is_playing():
+                # Update the Now Playing message first
+                if self.guild_id in self.music_cog.now_playing_messages:
+                    channel, message = self.music_cog.now_playing_messages[self.guild_id]
+                    embed = discord.Embed(
+                        title="Song Skipped",
+                        description="⏭️ Skip vote successful! Skipping to the next song...",
+                        color=discord.Color.blue()
+                    )
+                    await message.edit(embed=embed)
+                
+                # Now stop the song (will trigger playing the next song)
                 self.voice_client.stop()
+                
                 await interaction.response.edit_message(
                     content="⏭️ Vote skip successful! Skipping to the next song.",
                     embed=None,

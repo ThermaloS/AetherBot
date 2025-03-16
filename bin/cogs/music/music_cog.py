@@ -27,6 +27,9 @@ class MusicCog(commands.Cog):
         self.song_queues: Dict[str, Deque[Tuple[str, str]]] = {}  # {guild_id: [(query, title), ...]}
         self.volumes: Dict[str, float] = {}  # {guild_id: volume}
         
+        # Track the "Now Playing" messages to update them rather than creating new ones
+        self.now_playing_messages: Dict[str, Tuple[discord.TextChannel, discord.Message]] = {}
+        
         # Load settings from config if available
         if config:
             music_config = config.get_section('music') if hasattr(config, 'get_section') else {}
@@ -245,6 +248,170 @@ class MusicCog(commands.Cog):
                 logger.error(f"Error in after_callback: {e}")
                 
         return after_callback
+    
+    async def update_now_playing_message(
+        self,
+        guild_id: str,
+        title: str,
+        thumbnail_url: Optional[str] = None,
+        status: str = "▶️ Playing",
+        color: discord.Color = discord.Color.green()
+    ) -> Optional[discord.Message]:
+        """
+        Update or create the Now Playing message.
+        
+        Args:
+            guild_id: Discord guild ID as string
+            title: Title of the currently playing song
+            thumbnail_url: URL for the thumbnail image
+            status: Status text to display (e.g. "Playing", "Paused")
+            color: Embed color
+            
+        Returns:
+            Updated or new message object
+        """
+        if guild_id not in self.now_playing_messages:
+            # No existing message for this guild
+            return None
+            
+        try:
+            channel, message = self.now_playing_messages[guild_id]
+            
+            # Create the updated embed
+            embed = discord.Embed(
+                title="Now Playing",
+                description=f"**{title}**",
+                color=color
+            )
+            
+            # Add volume info
+            volume = self.get_guild_volume(guild_id)
+            embed.add_field(
+                name="Volume", 
+                value=f"🔊 {int(volume * 100)}%", 
+                inline=True
+            )
+            
+            # Add queue info if available
+            if guild_id in self.song_queues and self.song_queues[guild_id]:
+                next_up = self.song_queues[guild_id][0][1] if self.song_queues[guild_id] else "None"
+                embed.add_field(
+                    name="Up Next",
+                    value=f"**{next_up}**" if next_up != "None" else "Nothing in queue",
+                    inline=True
+                )
+                
+                queue_length = len(self.song_queues[guild_id])
+                if queue_length > 0:
+                    embed.add_field(
+                        name="Queue Length",
+                        value=f"{queue_length} song{'s' if queue_length != 1 else ''}",
+                        inline=True
+                    )
+            
+            # Add thumbnail if available
+            if thumbnail_url:
+                embed.set_thumbnail(url=thumbnail_url)
+            
+            # Add status
+            embed.add_field(
+                name="Status",
+                value=status,
+                inline=False
+            )
+            
+            # Add command help hint
+            embed.set_footer(text="Use /queue to see the full queue | Use /play to add more songs")
+            
+            # Update the existing message
+            await message.edit(embed=embed)
+            return message
+            
+        except discord.NotFound:
+            # Message was deleted or no longer exists
+            del self.now_playing_messages[guild_id]
+            return None
+        except Exception as e:
+            logger.error(f"Error updating Now Playing message: {e}")
+            return None
+    
+    async def create_now_playing_message(
+        self,
+        guild_id: str,
+        channel: discord.TextChannel,
+        title: str,
+        thumbnail_url: Optional[str] = None
+    ) -> Optional[discord.Message]:
+        """
+        Create a new Now Playing message.
+        
+        Args:
+            guild_id: Discord guild ID as string
+            channel: Channel to send the message to
+            title: Title of the song
+            thumbnail_url: URL for the thumbnail image
+            
+        Returns:
+            The new message object
+        """
+        try:
+            # Create the embed
+            embed = discord.Embed(
+                title="Now Playing",
+                description=f"**{title}**",
+                color=discord.Color.green()
+            )
+            
+            # Add volume info
+            volume = self.get_guild_volume(guild_id)
+            embed.add_field(
+                name="Volume", 
+                value=f"🔊 {int(volume * 100)}%", 
+                inline=True
+            )
+            
+            # Add queue info if available
+            if guild_id in self.song_queues and self.song_queues[guild_id]:
+                next_up = self.song_queues[guild_id][0][1] if self.song_queues[guild_id] else "None"
+                embed.add_field(
+                    name="Up Next",
+                    value=f"**{next_up}**" if next_up != "None" else "Nothing in queue",
+                    inline=True
+                )
+                
+                queue_length = len(self.song_queues[guild_id])
+                if queue_length > 0:
+                    embed.add_field(
+                        name="Queue Length",
+                        value=f"{queue_length} song{'s' if queue_length != 1 else ''}",
+                        inline=True
+                    )
+            
+            # Add thumbnail if available
+            if thumbnail_url:
+                embed.set_thumbnail(url=thumbnail_url)
+            
+            # Add status
+            embed.add_field(
+                name="Status",
+                value="▶️ Playing",
+                inline=False
+            )
+            
+            # Add command help hint
+            embed.set_footer(text="Use /queue to see the full queue | Use /play to add more songs")
+            
+            # Send the new message
+            message = await channel.send(embed=embed)
+            
+            # Store the message for future updates
+            self.now_playing_messages[guild_id] = (channel, message)
+            
+            return message
+            
+        except Exception as e:
+            logger.error(f"Error creating Now Playing message: {e}")
+            return None
         
     async def play_audio(
         self, 
@@ -309,58 +476,15 @@ class MusicCog(commands.Cog):
                 voice_client.play(source, after=after_callback)
                 logger.info(f"Playback started successfully for {title}")
                 
-                # Update the existing message if provided
-                if message:
-                    youtube_id = self._extract_youtube_id(self.last_played[guild_id][0])
-                    thumbnail_url = f"https://img.youtube.com/vi/{youtube_id}/mqdefault.jpg" if youtube_id else None
-                    
-                    embed = discord.Embed(
-                        title="Now Playing",
-                        description=f"**{title}**",
-                        color=discord.Color.green()
-                    )
-                    
-                    embed.add_field(
-                        name="Volume", 
-                        value=f"🔊 {int(volume * 100)}%", 
-                        inline=True
-                    )
-                    
-                    # Add queue info if available
-                    if guild_id in self.song_queues and self.song_queues[guild_id]:
-                        next_up = self.song_queues[guild_id][0][1] if self.song_queues[guild_id] else "None"
-                        embed.add_field(
-                            name="Up Next",
-                            value=f"**{next_up}**" if next_up != "None" else "Nothing in queue",
-                            inline=True
-                        )
-                        
-                        queue_length = len(self.song_queues[guild_id])
-                        if queue_length > 0:
-                            embed.add_field(
-                                name="Queue Length",
-                                value=f"{queue_length} song{'s' if queue_length != 1 else ''}",
-                                inline=True
-                            )
-                    
-                    # Add thumbnail if available
-                    if thumbnail_url:
-                        embed.set_thumbnail(url=thumbnail_url)
-                    
-                    # Add progress bar (placebo since we can't track actual progress easily)
-                    embed.add_field(
-                        name="Status",
-                        value="▶️ Playing",
-                        inline=False
-                    )
-                    
-                    try:
-                        await message.edit(embed=embed)
-                    except discord.HTTPException as e:
-                        logger.error(f"Failed to update message: {e}")
+                # Get thumbnail URL if available
+                youtube_id = self._extract_youtube_id(self.last_played[guild_id][0])
+                thumbnail_url = f"https://img.youtube.com/vi/{youtube_id}/mqdefault.jpg" if youtube_id else None
+                
+                # Update the Now Playing message if it exists, or create a new one
+                if guild_id in self.now_playing_messages:
+                    await self.update_now_playing_message(guild_id, title, thumbnail_url)
                 else:
-                    # Send a new message if no update message provided
-                    await channel.send(f"Now playing: **{title}** (Volume: {int(volume * 100)}%)")
+                    await self.create_now_playing_message(guild_id, channel, title, thumbnail_url)
                     
                 return True
             except Exception as play_error:
@@ -400,6 +524,28 @@ class MusicCog(commands.Cog):
             else:
                 await channel.send(f"An unexpected error occurred during playback: {type(e).__name__}")
             return False
+    
+    # Update the pause and resume methods in associated cogs to call this
+    async def update_playback_status(self, guild_id: str, status: str, color: discord.Color = discord.Color.blue()):
+        """
+        Update the Now Playing message with the current playback status.
+        
+        Args:
+            guild_id: Discord guild ID as string
+            status: Status text to display
+            color: Color for the embed
+        """
+        if guild_id not in self.now_playing_messages:
+            return
+            
+        if guild_id not in self.last_played:
+            return
+            
+        _, title = self.last_played[guild_id]
+        youtube_id = self._extract_youtube_id(self.last_played[guild_id][0])
+        thumbnail_url = f"https://img.youtube.com/vi/{youtube_id}/mqdefault.jpg" if youtube_id else None
+        
+        await self.update_now_playing_message(guild_id, title, thumbnail_url, status, color)
         
     async def play_next_song(
         self, 
@@ -431,13 +577,15 @@ class MusicCog(commands.Cog):
         voice_client = guild.voice_client
         if voice_client is None:
             logger.debug("Voice client is None, cannot play")
-            if message:
+            if guild_id in self.now_playing_messages:
+                channel, message = self.now_playing_messages[guild_id]
                 embed = discord.Embed(
                     title="Playback Stopped",
                     description="No longer connected to a voice channel.",
                     color=discord.Color.red()
                 )
                 await message.edit(embed=embed)
+                del self.now_playing_messages[guild_id]
             return
 
         # Get the guild's song queue
@@ -448,7 +596,8 @@ class MusicCog(commands.Cog):
         if not queue:
             logger.debug("Queue is empty, checking radio mode")
             
-            if message:
+            if guild_id in self.now_playing_messages:
+                channel, message = self.now_playing_messages[guild_id]
                 embed = discord.Embed(
                     title="Queue Empty",
                     description="Checking radio mode...",
@@ -483,7 +632,9 @@ class MusicCog(commands.Cog):
                 logger.debug("Queue still empty after radio check, disconnecting")
                 await voice_client.disconnect()
                 
-                if message:
+                # Update Now Playing message if it exists
+                if guild_id in self.now_playing_messages:
+                    channel, message = self.now_playing_messages[guild_id]
                     embed = discord.Embed(
                         title="Queue Finished",
                         description="No more songs in queue. Disconnected from voice channel.",
@@ -509,40 +660,44 @@ class MusicCog(commands.Cog):
         # Get playable URL
         try:
             logger.debug(f"Getting playable URL for {title}")
-            if message:
-                loading_embed = discord.Embed(
-                    title="Loading Song",
-                    description=f"Preparing to play **{title}**...",
-                    color=discord.Color.blue()
+            # Update loading status in Now Playing message if it exists
+            if guild_id in self.now_playing_messages:
+                channel, message = self.now_playing_messages[guild_id]
+                youtube_id = self._extract_youtube_id(original_query)
+                thumbnail_url = f"https://img.youtube.com/vi/{youtube_id}/mqdefault.jpg" if youtube_id else None
+                await self.update_now_playing_message(
+                    guild_id, 
+                    title, 
+                    thumbnail_url, 
+                    "⏳ Loading...", 
+                    discord.Color.blue()
                 )
-                try:
-                    await message.edit(embed=loading_embed)
-                except discord.HTTPException:
-                    pass
                 
             url, _ = await self.get_song_url(original_query)
             if not url:
                 logger.warning(f"Failed to get URL for {title}")
                 
-                if message:
-                    error_embed = discord.Embed(
+                # Update error in Now Playing message if it exists
+                if guild_id in self.now_playing_messages:
+                    channel, message = self.now_playing_messages[guild_id]
+                    embed = discord.Embed(
                         title="Playback Error",
                         description=f"Failed to get playable URL for: **{title}**\nSkipping to next song...",
                         color=discord.Color.red()
                     )
-                    await message.edit(embed=error_embed)
+                    await message.edit(embed=embed)
                 else:
                     await channel.send(f"Failed to get playable URL for: {title}")
                     
                 # Try the next song
                 if queue:
-                    asyncio.create_task(self.play_next_song(guild_id, channel, message))
+                    asyncio.create_task(self.play_next_song(guild_id, channel))
                 return
                 
             logger.debug(f"Successfully got URL for {title}")
             
             # Define the callback function for when the song finishes
-            after_callback = self.create_after_callback(guild_id, channel, message)
+            after_callback = self.create_after_callback(guild_id, channel)
             
             # Play the song
             success = await self.play_audio(
@@ -551,32 +706,69 @@ class MusicCog(commands.Cog):
                 title,
                 guild_id, 
                 channel, 
-                after_callback,
-                message
+                after_callback
             )
             
             if not success:
                 logger.warning(f"Failed to play {title}, trying next song")
                 # Try the next song
                 if queue:
-                    asyncio.create_task(self.play_next_song(guild_id, channel, message))
+                    asyncio.create_task(self.play_next_song(guild_id, channel))
                 
         except Exception as url_error:
             logger.error(f"Error getting URL: {url_error}")
             
-            if message:
-                error_embed = discord.Embed(
+            # Update error in Now Playing message if it exists
+            if guild_id in self.now_playing_messages:
+                channel, message = self.now_playing_messages[guild_id]
+                embed = discord.Embed(
                     title="Playback Error",
                     description=f"Error retrieving playable URL: {url_error}\nSkipping to next song...",
                     color=discord.Color.red()
                 )
-                await message.edit(embed=error_embed)
+                await message.edit(embed=embed)
             else:
                 await channel.send(f"Error retrieving playable URL: {url_error}")
                 
             if queue:
-                asyncio.create_task(self.play_next_song(guild_id, channel, message))
+                asyncio.create_task(self.play_next_song(guild_id, channel))
             return
+    
+    # Only use a single command definition (hybrid command) that works as both
+    # a traditional text command and a slash command
+    @commands.hybrid_command(name="nowplaying", aliases=["np"], description="Show what's currently playing")
+    async def now_playing(self, ctx):
+        """Display information about the currently playing song."""
+        guild_id = str(ctx.guild.id)
+        
+        # Check if music is playing
+        voice_client = ctx.guild.voice_client
+        if not voice_client or not (voice_client.is_playing() or voice_client.is_paused()):
+            await ctx.send("No music is currently playing.")
+            return
+            
+        # Get the last played song
+        last_played = self.last_played.get(guild_id)
+        if not last_played:
+            await ctx.send("No song information available.")
+            return
+            
+        original_query, title = last_played
+        youtube_id = self._extract_youtube_id(original_query)
+        thumbnail_url = f"https://img.youtube.com/vi/{youtube_id}/mqdefault.jpg" if youtube_id else None
+        
+        # Create or update the Now Playing message
+        if guild_id in self.now_playing_messages:
+            channel, message = self.now_playing_messages[guild_id]
+            status = "⏸️ Paused" if voice_client.is_paused() else "▶️ Playing"
+            color = discord.Color.gold() if voice_client.is_paused() else discord.Color.green()
+            await self.update_now_playing_message(guild_id, title, thumbnail_url, status, color)
+            
+            # Reply with a link to the now playing message
+            await ctx.send(f"Now Playing message: {message.jump_url}")
+        else:
+            # Create a new Now Playing message
+            await self.create_now_playing_message(guild_id, ctx.channel, title, thumbnail_url)
     
 async def setup(bot: commands.Bot, config=None):
     """
