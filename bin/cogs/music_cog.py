@@ -3,7 +3,8 @@ from discord.ext import commands
 from collections import deque
 import yt_dlp
 import asyncio
-from typing import Dict, Deque, Optional, Tuple, List, Any
+import functools
+from typing import Dict, Deque, Optional, Tuple, List, Any, Union
 
 
 class MusicCog(commands.Cog):
@@ -14,15 +15,20 @@ class MusicCog(commands.Cog):
         self.song_queues: Dict[int, Deque[Tuple[str, str]]] = {}  # {guild_id: [(query, title), ...]}
         self.volumes: Dict[int, float] = {}  # {guild_id: volume}
         self.default_volume = 0.05  # 5%
+        self.last_played: Dict[int, Tuple[str, str]] = {}  # {guild_id: (query, title)}
         super().__init__()
     
-    async def _extract_info_async(self, query: str, opts: Dict[str, Any]) -> Dict[str, Any]:
+    async def extract_info_async(self, query: str, ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
         """Extracts video information asynchronously using yt_dlp."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, 
-            lambda: yt_dlp.YoutubeDL(opts).extract_info(query, download=False)
-        )
+        func = functools.partial(self._extract, query, ydl_opts)
+        return await loop.run_in_executor(None, func)
+    
+    def _extract(self, query: str, ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
+        """Helper method to extract info with yt_dlp."""
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            results = ydl.extract_info(query, download=False)
+            return results
     
     async def get_song_url(self, query: str) -> Tuple[Optional[str], Optional[str]]:
         """Gets playable URL and title from a search query or direct URL."""
@@ -35,7 +41,7 @@ class MusicCog(commands.Cog):
         }
         
         try:
-            results = await self._extract_info_async(query, ydl_opts)
+            results = await self.extract_info_async(query, ydl_opts)
             
             if 'entries' in results:
                 # Search result
@@ -47,39 +53,22 @@ class MusicCog(commands.Cog):
         except Exception as e:
             print(f"Error extracting song info: {e}")
             return None, None
-    
-    async def find_similar_songs(self, query: str, limit: int = 3) -> List[Tuple[str, str]]:
-        """Finds similar songs based on the original query."""
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'quiet': True,
-            'no_warnings': True,
-            'noplaylist': True,
-            'default_search': 'ytsearch',
-            'extract_flat': 'in_playlist'
-        }
-        
-        try:
-            results = await self._extract_info_async(query, ydl_opts)
-            
-            # Handle search vs direct URL results
-            if 'entries' in results:
-                results = results['entries'][0]
-                
-            # Find related videos
-            similar_songs = []
-            if 'related_videos' in results:
-                for related in results['related_videos'][:limit]:
-                    similar_songs.append((related['webpage_url'], related['title']))
-                    
-            return similar_songs
-        except Exception as e:
-            print(f"Error finding similar songs: {e}")
-            return []
 
     def get_guild_volume(self, guild_id: int) -> float:
         """Gets the volume for a guild or returns the default."""
         return self.volumes.get(guild_id, self.default_volume)
+    
+    def get_last_played(self, guild_id: int) -> Optional[Tuple[str, str]]:
+        """Gets the last played song for a guild."""
+        return self.last_played.get(guild_id)
+    
+    def add_songs_to_queue(self, guild_id: int, songs: List[Tuple[str, str]]) -> int:
+        """Add songs to the queue. Returns the number of songs added."""
+        if not songs:
+            return 0
+            
+        self.song_queues.setdefault(guild_id, deque()).extend(songs)
+        return len(songs)
         
     async def play_audio(
         self, 
@@ -115,22 +104,52 @@ class MusicCog(commands.Cog):
             return False
     
     async def play_next_song(self, guild_id: int, interaction: discord.Interaction) -> None:
-        """Plays the next song in the queue or disconnects if the queue is empty."""
+        """Plays the next song in the queue."""
         voice_client = interaction.guild.voice_client
         if voice_client is None:
             return
 
         # Get the guild's song queue
         queue = self.song_queues.get(guild_id, deque())
+        
+        # If queue is empty, check if RadioCog can provide more songs
         if not queue:
-            # Disconnect if queue is empty
-            if voice_client.is_connected():
+            # Try to get the RadioCog
+            radio_cog = self.bot.get_cog("RadioCog")
+            
+            if radio_cog and radio_cog.is_radio_enabled(guild_id):
+                last_song = self.get_last_played(guild_id)
+                
+                if last_song:
+                    original_query, _ = last_song
+                    similar_songs = await radio_cog.add_similar_songs_to_queue(
+                        original_query, 
+                        interaction.channel
+                    )
+                    
+                    # Add the similar songs to our queue
+                    if similar_songs:
+                        added = self.add_songs_to_queue(guild_id, similar_songs)
+                        await interaction.channel.send(f"Added {added} similar songs to the queue.")
+                        # Update queue after adding songs
+                        queue = self.song_queues.get(guild_id, deque())
+                    else:
+                        await interaction.channel.send("Couldn't find more songs for radio.")
+                else:
+                    # No last song to base recommendations on
+                    await interaction.channel.send("No reference song for radio recommendations.")
+            
+            # If queue is still empty, disconnect
+            if not queue and voice_client.is_connected():
                 await voice_client.disconnect()
                 await interaction.channel.send("Queue finished, disconnecting.")
-            return
+                return
 
         # Get the next song
         original_query, title = queue.popleft()
+        
+        # Store as last played for radio mode reference
+        self.last_played[guild_id] = (original_query, title)
         
         # Get playable URL
         url, _ = await self.get_song_url(original_query)
@@ -145,23 +164,11 @@ class MusicCog(commands.Cog):
             if error:
                 print(f"Playback error: {error}")
             
-            async def next_action():
-                # If queue is empty, try to add similar songs
-                if not self.song_queues.get(guild_id, []):
-                    try:
-                        similar_songs = await self.find_similar_songs(original_query)
-                        if similar_songs:
-                            self.song_queues.setdefault(guild_id, deque()).extend(similar_songs)
-                            channel = self.bot.get_guild(guild_id).get_channel(interaction.channel_id)
-                            await channel.send("Adding similar songs to the queue...")
-                    except Exception as e:
-                        print(f"Error adding similar songs: {e}")
-                
-                # Play next song or disconnect
-                await self.play_next_song(guild_id, interaction)
-            
             # Schedule the next action
-            asyncio.run_coroutine_threadsafe(next_action(), self.bot.loop)
+            asyncio.run_coroutine_threadsafe(
+                self.play_next_song(guild_id, interaction), 
+                self.bot.loop
+            )
         
         # Try to play the song
         success = await self.play_audio(

@@ -43,7 +43,7 @@ class AddSongs(commands.Cog):
         }
 
         try:
-            results = await self.music_cog.search_ytdlp_async(song_query, ydl_opts_play)
+            results = await self.music_cog.extract_info_async(song_query, ydl_opts_play)
 
             if results.get('_type') == 'playlist':
                 first_track = results['entries'][0]
@@ -113,7 +113,7 @@ class AddSongs(commands.Cog):
         }
 
         try:
-            results = await self.music_cog.search_ytdlp_async(playlist_url, ydl_opts)
+            results = await self.music_cog.extract_info_async(playlist_url, ydl_opts)
 
             if results.get('_type') == 'playlist':
                 guild_id = str(interaction.guild_id)
