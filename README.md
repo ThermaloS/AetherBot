@@ -19,7 +19,7 @@ To get started with Aether, follow these steps:
 
 3. Run the main script to start the application:
     ```
-    python src/main_script.py
+    python src/main.py
     ```
     
 ## License
