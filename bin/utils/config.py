@@ -45,6 +45,10 @@ class BotConfig:
             return self.config[section][key]
         return default
     
+    def get_section(self, section: str) -> Dict[str, Any]:
+        """Get an entire configuration section."""
+        return self.config.get(section, {})
+    
     def set(self, section: str, key: str, value: Any) -> None:
         """Set a configuration value."""
         if section not in self.config:
