@@ -15,7 +15,7 @@ from bin.cogs.music_cog import MusicCog, setup as music_setup
 from bin.cogs.commands.music_general_controls import setup as general_controls_setup
 from bin.cogs.commands.music_play_commands import setup as play_commands_setup
 from bin.cogs.commands.music_elevated_commands import setup as elevated_commands_setup
-    
+from bin.cogs.RadioCog import setup as radio_setup  
 
 # Logging Setup
 logger = logging.getLogger('discord')
@@ -70,6 +70,7 @@ async def main():
     await general_controls_setup(bot, music_cog)
     await play_commands_setup(bot, music_cog)
     await elevated_commands_setup(bot, music_cog)
+    await radio_setup(bot, music_cog)
     # General Bot Setup
     await welcome_setup(bot)
     await server_setup(bot)
@@ -83,4 +84,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())  # Use asyncio.run to start the async main functionpip
+    asyncio.run(main())  # Use asyncio.run to start the async main function
