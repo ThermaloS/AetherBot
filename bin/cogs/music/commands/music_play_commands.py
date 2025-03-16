@@ -4,7 +4,7 @@ from discord import app_commands
 from collections import deque
 import asyncio
 
-from bin.cogs.music_cog import MusicCog
+from bin.cogs.music.music_cog import MusicCog
 
 class AddSongs(commands.Cog):
     def __init__(self, bot: commands.Bot, music_cog: 'MusicCog'):
