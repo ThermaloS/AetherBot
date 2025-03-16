@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import yt_dlp
 import asyncio
 import functools
@@ -61,7 +62,7 @@ class RadioCog(commands.Cog):
         """Checks if radio mode is enabled for a guild."""
         return self.radio_mode.get(guild_id, False)
     
-    @commands.command(name="radio")
+    @app_commands.command(name="radio", description="Toggle radio mode on/off.")
     async def toggle_radio(self, ctx: commands.Context) -> None:
         """Toggles radio mode on/off."""
         guild_id = ctx.guild.id

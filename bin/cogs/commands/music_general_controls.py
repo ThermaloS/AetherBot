@@ -50,18 +50,6 @@ class GeneralMusicControls(commands.Cog):
         voice_client.resume()
         await interaction.response.send_message("Playback resumed!")
 
-    @app_commands.command(name="radio", description="Toggle 24/7 radio mode (auto-add similar songs).")
-    async def radio(self, interaction: discord.Interaction):
-        guild_id = interaction.guild_id
-    
-    # Toggle radio mode
-        new_state = await self.music_cog.toggle_radio_mode(guild_id, interaction.channel)
-    
-        await interaction.response.send_message(
-        f"24/7 Radio mode is now {'enabled' if new_state else 'disabled'}. " +
-        ("Similar songs will be automatically added when the queue is empty." if new_state else "")
-    )
-
     @app_commands.command(name="voteskip", description="Vote to skip the current song.")
     async def voteskip(self, interaction: discord.Interaction):
         voice_client = interaction.guild.voice_client
