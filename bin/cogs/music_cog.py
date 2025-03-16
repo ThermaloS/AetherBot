@@ -12,10 +12,10 @@ class MusicCog(commands.Cog):
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.song_queues: Dict[int, Deque[Tuple[str, str]]] = {}  # {guild_id: [(query, title), ...]}
-        self.volumes: Dict[int, float] = {}  # {guild_id: volume}
+        self.song_queues: Dict[str, Deque[Tuple[str, str]]] = {}  # {guild_id: [(query, title), ...]}
+        self.volumes: Dict[str, float] = {}  # {guild_id: volume}
         self.default_volume = 0.05  # 5%
-        self.last_played: Dict[int, Tuple[str, str]] = {}  # {guild_id: (query, title)}
+        self.last_played: Dict[str, Tuple[str, str]] = {}  # {guild_id: (query, title)}
         super().__init__()
     
     async def extract_info_async(self, query: str, ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
@@ -54,20 +54,23 @@ class MusicCog(commands.Cog):
             print(f"Error extracting song info: {e}")
             return None, None
 
-    def get_guild_volume(self, guild_id: int) -> float:
+    def get_guild_volume(self, guild_id: str) -> float:
         """Gets the volume for a guild or returns the default."""
         return self.volumes.get(guild_id, self.default_volume)
     
-    def get_last_played(self, guild_id: int) -> Optional[Tuple[str, str]]:
+    def get_last_played(self, guild_id: str) -> Optional[Tuple[str, str]]:
         """Gets the last played song for a guild."""
         return self.last_played.get(guild_id)
     
-    def add_songs_to_queue(self, guild_id: int, songs: List[Tuple[str, str]]) -> int:
+    def add_songs_to_queue(self, guild_id: str, songs: List[Tuple[str, str]]) -> int:
         """Add songs to the queue. Returns the number of songs added."""
         if not songs:
             return 0
             
-        self.song_queues.setdefault(guild_id, deque()).extend(songs)
+        if guild_id not in self.song_queues:
+            self.song_queues[guild_id] = deque()
+            
+        self.song_queues[guild_id].extend(songs)
         return len(songs)
         
     async def play_audio(
@@ -75,7 +78,7 @@ class MusicCog(commands.Cog):
         voice_client: discord.VoiceClient, 
         url: str, 
         title: str,
-        guild_id: int, 
+        guild_id: str, 
         channel: discord.TextChannel, 
         after_callback
     ) -> bool:
@@ -103,7 +106,7 @@ class MusicCog(commands.Cog):
             await channel.send("An unexpected error occurred during playback.")
             return False
     
-    async def play_next_song(self, guild_id: int, interaction: discord.Interaction) -> None:
+    async def play_next_song(self, guild_id: str, interaction: discord.Interaction) -> None:
         """Plays the next song in the queue."""
         voice_client = interaction.guild.voice_client
         if voice_client is None:
@@ -117,7 +120,7 @@ class MusicCog(commands.Cog):
             # Try to get the RadioCog
             radio_cog = self.bot.get_cog("RadioCog")
             
-            if radio_cog and radio_cog.is_radio_enabled(guild_id):
+            if radio_cog and radio_cog.is_radio_enabled(int(guild_id)):
                 last_song = self.get_last_played(guild_id)
                 
                 if last_song:
@@ -129,12 +132,12 @@ class MusicCog(commands.Cog):
                     
                     # Add the similar songs to our queue
                     if similar_songs:
-                        added = self.add_songs_to_queue(guild_id, similar_songs)
-                        await interaction.channel.send(f"Added {added} similar songs to the queue.")
+                        self.add_songs_to_queue(guild_id, similar_songs)
+                        await interaction.channel.send(f"Added {len(similar_songs)} similar songs to the queue.")
                         # Update queue after adding songs
                         queue = self.song_queues.get(guild_id, deque())
                     else:
-                        await interaction.channel.send("Couldn't find more songs for radio.")
+                        await interaction.channel.send("Couldn't find more songs for radio mode.")
                 else:
                     # No last song to base recommendations on
                     await interaction.channel.send("No reference song for radio recommendations.")
