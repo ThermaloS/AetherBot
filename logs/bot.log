@@ -1,0 +1,4 @@
+2025-03-16 02:44:29,685 - discord_bot - INFO - Logging system initialized
+2025-03-16 02:44:29,687 - discord_bot - INFO - Setting up cogs...
+2025-03-16 02:44:29,997 - discord_bot - CRITICAL - Fatal error: MusicCog.__init__() takes 2 positional arguments but 3 were given
+2025-03-16 02:44:29,997 - discord_bot - INFO - Bot has been shut down
