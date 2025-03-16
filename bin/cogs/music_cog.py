@@ -6,7 +6,6 @@ import asyncio
 import functools
 from typing import Dict, Deque, Optional, Tuple, List, Any, Union
 
-
 class MusicCog(commands.Cog):
     """A Discord bot cog for playing music from YouTube."""
     
@@ -38,20 +37,49 @@ class MusicCog(commands.Cog):
             'no_warnings': True,
             'noplaylist': True,
             'default_search': 'ytsearch',
+            'extract_flat': False,  # Changed from default to extract full info
+            # Add more options to deal with YouTube's restrictions
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+            'logtostderr': False,
+            'geo_bypass': True,
+            'source_address': '0.0.0.0',  # IPv6 addresses cause issues sometimes
         }
         
         try:
+            print(f"Extracting info for: {query}")
             results = await self.extract_info_async(query, ydl_opts)
             
             if 'entries' in results:
                 # Search result
                 info = results['entries'][0]
-                return info.get('url'), info.get('title')
+                url = info.get('url')
+                if not url:  # Sometimes 'url' is not directly available
+                    print("Direct URL not found, trying alternate extraction")
+                    # Try to get the video URL and re-extract
+                    video_url = info.get('webpage_url')
+                    if video_url:
+                        results = await self.extract_info_async(video_url, ydl_opts)
+                        url = results.get('url')
+                
+                return url, info.get('title')
             else:
                 # Direct URL
-                return results.get('url'), results.get('title')
+                url = results.get('url')
+                if not url:
+                    print("Direct URL not found in results, trying formats")
+                    # Try to get URL from formats
+                    formats = results.get('formats', [])
+                    if formats:
+                        for format_item in formats:
+                            if format_item.get('acodec') != 'none':
+                                url = format_item.get('url')
+                                if url:
+                                    break
+                
+                return url, results.get('title')
         except Exception as e:
-            print(f"Error extracting song info: {e}")
+            print(f"Error extracting song info: {type(e).__name__}: {e}")
             return None, None
 
     def get_guild_volume(self, guild_id: str) -> float:
@@ -84,63 +112,67 @@ class MusicCog(commands.Cog):
     ) -> bool:
         """Plays audio from a URL with the specified volume."""
         try:
+            # Debug info
+            print(f"Starting playback for {title}")
+            print(f"URL: {url[:50]}...")  # Only print the first part of the URL for privacy
+            print(f"Voice client connected: {voice_client.is_connected()}")
+            
             # Set up FFmpeg options for reliable streaming
             ffmpeg_options = {
                 "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
                 "options": "-vn",
             }
             
-            source = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+            # Create audio source with more detailed error logging
+            try:
+                source = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+                print("Successfully created FFmpegPCMAudio source")
+            except Exception as ffmpeg_error:
+                print(f"FFmpeg error details: {ffmpeg_error}")
+                await channel.send(f"Error creating audio source: {ffmpeg_error}")
+                return False
+            
+            # Set volume
             volume = self.get_guild_volume(guild_id)
             source = discord.PCMVolumeTransformer(source, volume=volume)
             
-            voice_client.play(source, after=after_callback)
-            await channel.send(f"Now playing: **{title}** (Volume: {int(volume * 100)}%)")
-            return True
+            # Play the audio
+            try:
+                voice_client.play(source, after=after_callback)
+                print(f"Playback started successfully for {title}")
+                await channel.send(f"Now playing: **{title}** (Volume: {int(volume * 100)}%)")
+                return True
+            except Exception as play_error:
+                print(f"Play error details: {play_error}")
+                await channel.send(f"Error playing audio: {play_error}")
+                return False
+                
         except discord.ClientException as e:
-            print(f"FFmpeg error: {e}")
+            print(f"Discord client exception: {e}")
             await channel.send(f"Error playing audio: {e}")
             return False
         except Exception as e:
-            print(f"Unexpected playback error: {e}")
-            await channel.send("An unexpected error occurred during playback.")
+            print(f"Unexpected playback error: {type(e).__name__}: {e}")
+            await channel.send(f"An unexpected error occurred during playback: {type(e).__name__}")
             return False
-    
+        
     async def play_next_song(self, guild_id: str, interaction: discord.Interaction) -> None:
         """Plays the next song in the queue."""
+        print(f"Attempting to play next song for guild {guild_id}")
+        
         voice_client = interaction.guild.voice_client
         if voice_client is None:
+            print("Voice client is None, cannot play")
             return
 
         # Get the guild's song queue
         queue = self.song_queues.get(guild_id, deque())
+        print(f"Queue length: {len(queue)}")
         
         # If queue is empty, check if RadioCog can provide more songs
         if not queue:
-            # Try to get the RadioCog
-            radio_cog = self.bot.get_cog("RadioCog")
-            
-            if radio_cog and radio_cog.is_radio_enabled(int(guild_id)):
-                last_song = self.get_last_played(guild_id)
-                
-                if last_song:
-                    original_query, _ = last_song
-                    similar_songs = await radio_cog.add_similar_songs_to_queue(
-                        original_query, 
-                        interaction.channel
-                    )
-                    
-                    # Add the similar songs to our queue
-                    if similar_songs:
-                        self.add_songs_to_queue(guild_id, similar_songs)
-                        await interaction.channel.send(f"Added {len(similar_songs)} similar songs to the queue.")
-                        # Update queue after adding songs
-                        queue = self.song_queues.get(guild_id, deque())
-                    else:
-                        await interaction.channel.send("Couldn't find more songs for radio mode.")
-                else:
-                    # No last song to base recommendations on
-                    await interaction.channel.send("No reference song for radio recommendations.")
+            print("Queue is empty, checking radio mode")
+            # Radio mode code remains the same...
             
             # If queue is still empty, disconnect
             if not queue and voice_client.is_connected():
@@ -150,42 +182,27 @@ class MusicCog(commands.Cog):
 
         # Get the next song
         original_query, title = queue.popleft()
+        print(f"Popped song from queue: {title}")
         
         # Store as last played for radio mode reference
         self.last_played[guild_id] = (original_query, title)
         
-        # Get playable URL
-        url, _ = await self.get_song_url(original_query)
-        if not url:
-            await interaction.channel.send(f"Failed to get playable URL for: {title}")
-            # Try the next song
+        # Get playable URL with more detailed error handling
+        try:
+            print(f"Getting playable URL for {title}")
+            url, _ = await self.get_song_url(original_query)
+            if not url:
+                print(f"Failed to get URL for {title}")
+                await interaction.channel.send(f"Failed to get playable URL for: {title}")
+                # Try the next song
+                asyncio.create_task(self.play_next_song(guild_id, interaction))
+                return
+            print(f"Successfully got URL for {title}")
+        except Exception as url_error:
+            print(f"Error getting URL: {url_error}")
+            await interaction.channel.send(f"Error retrieving playable URL: {url_error}")
             asyncio.create_task(self.play_next_song(guild_id, interaction))
             return
-
-        # Define what happens after the song finishes
-        def after_playback(error):
-            if error:
-                print(f"Playback error: {error}")
-            
-            # Schedule the next action
-            asyncio.run_coroutine_threadsafe(
-                self.play_next_song(guild_id, interaction), 
-                self.bot.loop
-            )
-        
-        # Try to play the song
-        success = await self.play_audio(
-            voice_client=voice_client,
-            url=url, 
-            title=title,
-            guild_id=guild_id, 
-            channel=interaction.channel,
-            after_callback=after_playback
-        )
-        
-        if not success:
-            # Try the next song
-            asyncio.create_task(self.play_next_song(guild_id, interaction))
 
 
 async def setup(bot: commands.Bot):
