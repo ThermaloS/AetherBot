@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from collections import deque
+import asyncio
 
 from bin.cogs.music_cog import MusicCog
 
@@ -22,69 +23,39 @@ class AddSongs(commands.Cog):
             return
         voice_channel = voice_channel.channel
 
+        # Make sure we disconnect from any existing voice client before trying to connect
         voice_client = interaction.guild.voice_client
-
-        if voice_client is None:
-            voice_client = await voice_channel.connect()
-        elif voice_channel != voice_client.channel:
-            await voice_client.move_to(voice_channel)
-
-        if not song_query.startswith("http"):
-            song_query = f"ytsearch:{song_query}"
-
-        ydl_opts_play = {
-            'format': 'bestaudio/best',
-            'default_search': 'ytsearch',
-            'extract_flat': True,
-            'playlist_items': '1',
-            'noplaylist': False,
-            'quiet': True,
-            'no_warnings': True,
-        }
-
-        try:
-            results = await self.music_cog.extract_info_async(song_query, ydl_opts_play)
-
-            if results.get('_type') == 'playlist':
-                first_track = results['entries'][0]
-                title = first_track.get('title', "Untitled")
-                original_query = results.get('webpage_url', song_query)
-                await interaction.followup.send(
-                    f"**{title}** Added to the queue"
-                )
-
-            elif 'entries' in results:
-                first_track = results['entries'][0]
-                title = first_track.get('title', "Untitled")
-                original_query = first_track.get('webpage_url', song_query)
-
-            elif 'url' in results:
-                title = results.get('title', "Untitled")
-                original_query = results.get('webpage_url', song_query)
-
-            else:
-                await interaction.followup.send("No results found.")
-                return
-
-            if not original_query:
-                await interaction.followup.send("Could not retrieve a playable URL for this song.")
-                return
-
-        except Exception as e:
-            print(f"Error during yt_dlp extraction: {e}")
-            await interaction.followup.send("An error occurred while searching for the song.")
-            return
-
-        guild_id = str(interaction.guild_id)
-        if guild_id not in self.music_cog.song_queues:
-            self.music_cog.song_queues[guild_id] = deque()
-
-        if voice_client.is_playing() or voice_client.is_paused():
-            self.music_cog.song_queues[guild_id].append((original_query, title))
-            await interaction.followup.send(f"Added to queue: **{title}**")
+        if voice_client:
+            if voice_channel != voice_client.channel:
+                await voice_client.disconnect(force=True)
+                # Wait briefly to ensure disconnect completes
+                await asyncio.sleep(1)
+                try:
+                    voice_client = await voice_channel.connect()
+                except Exception as e:
+                    print(f"Connection error: {e}")
+                    await interaction.followup.send(f"Error connecting to voice channel: {e}")
+                    return
+            # If already in the right channel, check connection status
+            elif not voice_client.is_connected():
+                await voice_client.disconnect(force=True)
+                await asyncio.sleep(1)
+                try:
+                    voice_client = await voice_channel.connect()
+                except Exception as e:
+                    print(f"Reconnection error: {e}")
+                    await interaction.followup.send(f"Error reconnecting to voice channel: {e}")
+                    return
         else:
-            self.music_cog.song_queues[guild_id].append((original_query, title))
-            await self.music_cog.play_next_song(guild_id, interaction)
+            # Not connected at all
+            try:
+                voice_client = await voice_channel.connect()
+            except Exception as e:
+                print(f"Initial connection error: {e}")
+                await interaction.followup.send(f"Error connecting to voice channel: {e}")
+                return
+
+        print(f"Voice client status - Connected: {voice_client.is_connected()}")
 
     @app_commands.command(name="playlist", description="Enqueue an entire playlist.")
     @app_commands.describe(playlist_url="The URL of the YouTube playlist")

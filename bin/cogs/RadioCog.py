@@ -72,21 +72,21 @@ class RadioCog(commands.Cog):
         
         await interaction.response.send_message(f"Radio mode is now {'enabled' if new_state else 'disabled'}")
     
-async def add_similar_songs_to_queue(self, query: str, channel: discord.TextChannel) -> List[Tuple[str, str]]:
-    """Find similar songs based on the query and returns them as a list of (url, title) tuples."""
-    try:
-        await channel.send("Radio mode: Looking for similar songs...")
-        similar_songs = await self.find_similar_songs(query)
-        if not similar_songs:
-            await channel.send("Couldn't find any similar songs.")
+    async def add_similar_songs_to_queue(self, query: str, channel: discord.TextChannel) -> List[Tuple[str, str]]:
+        """Find similar songs based on the query and returns them as a list of (url, title) tuples."""
+        try:
+            await channel.send("Radio mode: Looking for similar songs...")
+            similar_songs = await self.find_similar_songs(query)
+            if not similar_songs:
+                await channel.send("Couldn't find any similar songs.")
+                return []
+                
+            await channel.send(f"Found {len(similar_songs)} similar songs.")
+            return similar_songs
+        except Exception as e:
+            print(f"Error finding similar songs: {e}")
+            await channel.send(f"Error finding similar songs: {e}")
             return []
-            
-        await channel.send(f"Found {len(similar_songs)} similar songs.")
-        return similar_songs
-    except Exception as e:
-        print(f"Error finding similar songs: {e}")
-        await channel.send(f"Error finding similar songs: {e}")
-        return []
 
 
 async def setup(bot: commands.Bot, music_cog: MusicCog):

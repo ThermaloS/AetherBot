@@ -1,4 +1,4 @@
-from random import random
+import random
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -155,13 +155,13 @@ class ElevatedMusicCommands(commands.Cog):
             return
 
         guild_id = str(interaction.guild_id)
-        if guild_id not in self.song_queues or not self.song_queues[guild_id]:
+        if guild_id not in self.music_cog.song_queues or not self.music_cog.song_queues[guild_id]:
             await interaction.response.send_message("The queue is empty.")
             return
 
-        song_list = list(self.song_queues[guild_id])
+        song_list = list(self.music_cog.song_queues[guild_id])
         random.shuffle(song_list)
-        self.song_queues[guild_id] = deque(song_list)
+        self.music_cog.song_queues[guild_id] = deque(song_list)
 
         await interaction.response.send_message("Queue shuffled!")
 
