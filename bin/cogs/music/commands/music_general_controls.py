@@ -132,8 +132,9 @@ class GeneralMusicControls(commands.Cog):
         
         await interaction.response.send_message("▶️ Playback resumed!")
 
-    @app_commands.command(name="nowplaying", description="Show what's currently playing and pin it")
-    async def now_playing(self, interaction: discord.Interaction):
+    # Renamed from "nowplaying" to "current_song" to avoid conflict with MusicCog
+    @app_commands.command(name="current_song", description="Show what's currently playing and pin it")
+    async def current_song(self, interaction: discord.Interaction):
         """Display information about the currently playing song."""
         guild_id = str(interaction.guild_id)
         
