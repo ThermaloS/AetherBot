@@ -4,41 +4,117 @@ from collections import deque
 import yt_dlp
 import asyncio
 import functools
-from typing import Dict, Deque, Optional, Tuple, List, Any, Union
+import logging
+from typing import Dict, Deque, Optional, Tuple, List, Any, Union, Callable
+
+logger = logging.getLogger('discord_bot.music')
 
 class MusicCog(commands.Cog):
     """A Discord bot cog for playing music from YouTube."""
     
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot, config=None):
+        """
+        Initialize the MusicCog with bot instance and configuration.
         
+        Args:
+            bot: The Discord bot instance
+            config: Configuration object for the bot
+        """
         self.bot = bot
+        self.config = config
+        
+        # Initialize state variables
         self.song_queues: Dict[str, Deque[Tuple[str, str]]] = {}  # {guild_id: [(query, title), ...]}
         self.volumes: Dict[str, float] = {}  # {guild_id: volume}
-        self.default_volume = 0.05  # 5%
+        
+        # Load settings from config if available
+        if config:
+            music_config = config.get_section('music') if hasattr(config, 'get_section') else {}
+            self.default_volume = music_config.get('default_volume', 0.05)  # 5%
+        else:
+            self.default_volume = 0.05
+            
         self.last_played: Dict[str, Tuple[str, str]] = {}  # {guild_id: (query, title)}
+        logger.info("MusicCog initialized")
         super().__init__()
     
     async def extract_info_async(self, query: str, ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
-        """Extracts video information asynchronously using yt_dlp."""
+        """
+        Extracts video information asynchronously using yt_dlp.
+        
+        Args:
+            query: Search query or URL
+            ydl_opts: Options for yt_dlp
+            
+        Returns:
+            Extracted video information
+        """
         loop = asyncio.get_running_loop()
         func = functools.partial(self._extract, query, ydl_opts)
         return await loop.run_in_executor(None, func)
     
     def _extract(self, query: str, ydl_opts: Dict[str, Any]) -> Dict[str, Any]:
-        """Helper method to extract info with yt_dlp."""
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            results = ydl.extract_info(query, download=False)
-            return results
+        """
+        Helper method to extract info with yt_dlp.
+        
+        Args:
+            query: Search query or URL
+            ydl_opts: Options for yt_dlp
+            
+        Returns:
+            Extracted video information
+        """
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                results = ydl.extract_info(query, download=False)
+                return results
+        except Exception as e:
+            logger.error(f"Error during extraction: {type(e).__name__}: {e}")
+            return {}
+    
+    def _extract_youtube_id(self, url: str) -> str:
+        """
+        Extract YouTube video ID from a URL or search query.
+        
+        Args:
+            url: YouTube URL or search query
+            
+        Returns:
+            YouTube video ID or empty string if not found
+        """
+        if not url:
+            return ""
+            
+        # Handle ytsearch: prefix
+        if url.startswith("ytsearch:"):
+            return ""
+            
+        # Try to extract from YouTube URL patterns
+        import re
+        youtube_regex = r'(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})'
+        match = re.search(youtube_regex, url)
+        
+        if match:
+            return match.group(1)
+        return ""
     
     async def get_song_url(self, query: str) -> Tuple[Optional[str], Optional[str]]:
-        """Gets playable URL and title from a search query or direct URL."""
+        """
+        Gets playable URL and title from a search query or direct URL.
+        
+        Args:
+            query: Search query or URL
+            
+        Returns:
+            Tuple of (url, title) or (None, None) if extraction fails
+        """
         ydl_opts = {
             'format': 'bestaudio/best',
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
             'default_search': 'ytsearch',
-            'extract_flat': False,  # Changed from default to extract full info
+            'extract_flat': False,
             # Add more options to deal with YouTube's restrictions
             'nocheckcertificate': True,
             'ignoreerrors': False,
@@ -48,15 +124,23 @@ class MusicCog(commands.Cog):
         }
         
         try:
-            print(f"Extracting info for: {query}")
+            logger.debug(f"Extracting info for: {query}")
             results = await self.extract_info_async(query, ydl_opts)
             
+            if not results:
+                logger.warning(f"No results found for query: {query}")
+                return None, None
+                
             if 'entries' in results:
                 # Search result
+                if not results['entries']:
+                    logger.warning("Empty entries list in search results")
+                    return None, None
+                    
                 info = results['entries'][0]
                 url = info.get('url')
                 if not url:  # Sometimes 'url' is not directly available
-                    print("Direct URL not found, trying alternate extraction")
+                    logger.debug("Direct URL not found, trying alternate extraction")
                     # Try to get the video URL and re-extract
                     video_url = info.get('webpage_url')
                     if video_url:
@@ -68,7 +152,7 @@ class MusicCog(commands.Cog):
                 # Direct URL
                 url = results.get('url')
                 if not url:
-                    print("Direct URL not found in results, trying formats")
+                    logger.debug("Direct URL not found in results, trying formats")
                     # Try to get URL from formats
                     formats = results.get('formats', [])
                     if formats:
@@ -80,19 +164,44 @@ class MusicCog(commands.Cog):
                 
                 return url, results.get('title')
         except Exception as e:
-            print(f"Error extracting song info: {type(e).__name__}: {e}")
+            logger.error(f"Error extracting song info: {type(e).__name__}: {e}")
             return None, None
 
     def get_guild_volume(self, guild_id: str) -> float:
-        """Gets the volume for a guild or returns the default."""
+        """
+        Gets the volume for a guild or returns the default.
+        
+        Args:
+            guild_id: Discord guild ID as string
+            
+        Returns:
+            Volume level as float (0.0 to 1.0)
+        """
         return self.volumes.get(guild_id, self.default_volume)
     
     def get_last_played(self, guild_id: str) -> Optional[Tuple[str, str]]:
-        """Gets the last played song for a guild."""
+        """
+        Gets the last played song for a guild.
+        
+        Args:
+            guild_id: Discord guild ID as string
+            
+        Returns:
+            Tuple of (query, title) for the last played song
+        """
         return self.last_played.get(guild_id)
     
     def add_songs_to_queue(self, guild_id: str, songs: List[Tuple[str, str]]) -> int:
-        """Add songs to the queue. Returns the number of songs added."""
+        """
+        Add songs to the queue.
+        
+        Args:
+            guild_id: Discord guild ID as string
+            songs: List of (query, title) tuples to add
+            
+        Returns:
+            Number of songs added
+        """
         if not songs:
             return 0
             
@@ -101,6 +210,41 @@ class MusicCog(commands.Cog):
             
         self.song_queues[guild_id].extend(songs)
         return len(songs)
+    
+    def create_after_callback(
+        self, 
+        guild_id: str, 
+        channel: discord.TextChannel,
+        message: Optional[discord.Message] = None
+    ) -> Callable:
+        """
+        Create a callback function for when a song finishes playing.
+        
+        Args:
+            guild_id: Discord guild ID as string
+            channel: Text channel to send notifications to
+            message: Optional message to update with new song info
+            
+        Returns:
+            Callback function
+        """
+        def after_callback(error):
+            if error:
+                logger.error(f"Player error: {error}")
+                asyncio.run_coroutine_threadsafe(
+                    channel.send(f"An error occurred during playback: {error}"),
+                    self.bot.loop
+                )
+            
+            # Schedule the next song to play
+            coro = self.play_next_song(guild_id, channel, message=message)
+            fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+            try:
+                fut.result()
+            except Exception as e:
+                logger.error(f"Error in after_callback: {e}")
+                
+        return after_callback
         
     async def play_audio(
         self, 
@@ -109,14 +253,29 @@ class MusicCog(commands.Cog):
         title: str,
         guild_id: str, 
         channel: discord.TextChannel, 
-        after_callback
+        after_callback: Callable,
+        message: Optional[discord.Message] = None
     ) -> bool:
-        """Plays audio from a URL with the specified volume."""
+        """
+        Plays audio from a URL with the specified volume.
+        
+        Args:
+            voice_client: Discord voice client
+            url: URL to play
+            title: Title of the song
+            guild_id: Discord guild ID as string
+            channel: Text channel to send notifications to
+            after_callback: Function to call when song finishes
+            message: Optional message to update with new song info
+            
+        Returns:
+            True if playback started successfully, False otherwise
+        """
         try:
             # Debug info
-            print(f"Starting playback for {title}")
-            print(f"URL: {url[:50]}...")  # Only print the first part of the URL for privacy
-            print(f"Voice client connected: {voice_client.is_connected()}")
+            logger.info(f"Starting playback for {title}")
+            logger.debug(f"URL: {url[:50]}...")  # Only print the first part of the URL for privacy
+            logger.debug(f"Voice client connected: {voice_client.is_connected()}")
             
             # Set up FFmpeg options for reliable streaming
             ffmpeg_options = {
@@ -127,10 +286,18 @@ class MusicCog(commands.Cog):
             # Create audio source with more detailed error logging
             try:
                 source = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                print("Successfully created FFmpegPCMAudio source")
+                logger.debug("Successfully created FFmpegPCMAudio source")
             except Exception as ffmpeg_error:
-                print(f"FFmpeg error details: {ffmpeg_error}")
-                await channel.send(f"Error creating audio source: {ffmpeg_error}")
+                logger.error(f"FFmpeg error details: {ffmpeg_error}")
+                if message:
+                    embed = discord.Embed(
+                        title="Playback Error",
+                        description=f"Failed to play **{title}**\nError: {ffmpeg_error}",
+                        color=discord.Color.red()
+                    )
+                    await message.edit(embed=embed)
+                else:
+                    await channel.send(f"Error creating audio source: {ffmpeg_error}")
                 return False
             
             # Set volume
@@ -140,104 +307,242 @@ class MusicCog(commands.Cog):
             # Play the audio
             try:
                 voice_client.play(source, after=after_callback)
-                print(f"Playback started successfully for {title}")
-                await channel.send(f"Now playing: **{title}** (Volume: {int(volume * 100)}%)")
+                logger.info(f"Playback started successfully for {title}")
+                
+                # Update the existing message if provided
+                if message:
+                    youtube_id = self._extract_youtube_id(self.last_played[guild_id][0])
+                    thumbnail_url = f"https://img.youtube.com/vi/{youtube_id}/mqdefault.jpg" if youtube_id else None
+                    
+                    embed = discord.Embed(
+                        title="Now Playing",
+                        description=f"**{title}**",
+                        color=discord.Color.green()
+                    )
+                    
+                    embed.add_field(
+                        name="Volume", 
+                        value=f"🔊 {int(volume * 100)}%", 
+                        inline=True
+                    )
+                    
+                    # Add queue info if available
+                    if guild_id in self.song_queues and self.song_queues[guild_id]:
+                        next_up = self.song_queues[guild_id][0][1] if self.song_queues[guild_id] else "None"
+                        embed.add_field(
+                            name="Up Next",
+                            value=f"**{next_up}**" if next_up != "None" else "Nothing in queue",
+                            inline=True
+                        )
+                        
+                        queue_length = len(self.song_queues[guild_id])
+                        if queue_length > 0:
+                            embed.add_field(
+                                name="Queue Length",
+                                value=f"{queue_length} song{'s' if queue_length != 1 else ''}",
+                                inline=True
+                            )
+                    
+                    # Add thumbnail if available
+                    if thumbnail_url:
+                        embed.set_thumbnail(url=thumbnail_url)
+                    
+                    # Add progress bar (placebo since we can't track actual progress easily)
+                    embed.add_field(
+                        name="Status",
+                        value="▶️ Playing",
+                        inline=False
+                    )
+                    
+                    try:
+                        await message.edit(embed=embed)
+                    except discord.HTTPException as e:
+                        logger.error(f"Failed to update message: {e}")
+                else:
+                    # Send a new message if no update message provided
+                    await channel.send(f"Now playing: **{title}** (Volume: {int(volume * 100)}%)")
+                    
                 return True
             except Exception as play_error:
-                print(f"Play error details: {play_error}")
-                await channel.send(f"Error playing audio: {play_error}")
+                logger.error(f"Play error details: {play_error}")
+                if message:
+                    embed = discord.Embed(
+                        title="Playback Error",
+                        description=f"Failed to play **{title}**\nError: {play_error}",
+                        color=discord.Color.red()
+                    )
+                    await message.edit(embed=embed)
+                else:
+                    await channel.send(f"Error playing audio: {play_error}")
                 return False
                 
         except discord.ClientException as e:
-            print(f"Discord client exception: {e}")
-            await channel.send(f"Error playing audio: {e}")
+            logger.error(f"Discord client exception: {e}")
+            if message:
+                embed = discord.Embed(
+                    title="Playback Error",
+                    description=f"Discord client error: {e}",
+                    color=discord.Color.red()
+                )
+                await message.edit(embed=embed)
+            else:
+                await channel.send(f"Error playing audio: {e}")
             return False
         except Exception as e:
-            print(f"Unexpected playback error: {type(e).__name__}: {e}")
-            await channel.send(f"An unexpected error occurred during playback: {type(e).__name__}")
+            logger.error(f"Unexpected playback error: {type(e).__name__}: {e}")
+            if message:
+                embed = discord.Embed(
+                    title="Playback Error",
+                    description=f"An unexpected error occurred: {type(e).__name__}",
+                    color=discord.Color.red()
+                )
+                await message.edit(embed=embed)
+            else:
+                await channel.send(f"An unexpected error occurred during playback: {type(e).__name__}")
             return False
         
-    async def play_next_song(self, guild_id: str, interaction: discord.Interaction) -> None:
-        """Plays the next song in the queue."""
-        print(f"Attempting to play next song for guild {guild_id}")
+    async def play_next_song(
+        self, 
+        guild_id: str, 
+        channel: discord.abc.Messageable,
+        message: Optional[discord.Message] = None
+    ) -> None:
+        """
+        Plays the next song in the queue.
         
-        voice_client = interaction.guild.voice_client
+        Args:
+            guild_id: Discord guild ID as string
+            channel: Channel object that can send messages (TextChannel or Interaction)
+            message: Optional message to update with new song info
+        """
+        logger.debug(f"Attempting to play next song for guild {guild_id}")
+        
+        # Get the appropriate guild object
+        guild = None
+        for g in self.bot.guilds:
+            if str(g.id) == guild_id:
+                guild = g
+                break
+                
+        if not guild:
+            logger.error(f"Could not find guild with ID {guild_id}")
+            return
+            
+        voice_client = guild.voice_client
         if voice_client is None:
-            print("Voice client is None, cannot play")
+            logger.debug("Voice client is None, cannot play")
+            if message:
+                embed = discord.Embed(
+                    title="Playback Stopped",
+                    description="No longer connected to a voice channel.",
+                    color=discord.Color.red()
+                )
+                await message.edit(embed=embed)
             return
 
         # Get the guild's song queue
         queue = self.song_queues.get(guild_id, deque())
-        print(f"Queue length: {len(queue)}")
+        logger.debug(f"Queue length: {len(queue)}")
         
         # If queue is empty, check if RadioCog can provide more songs
         if not queue:
-            print("Queue is empty, checking radio mode")
+            logger.debug("Queue is empty, checking radio mode")
+            
+            if message:
+                embed = discord.Embed(
+                    title="Queue Empty",
+                    description="Checking radio mode...",
+                    color=discord.Color.blue()
+                )
+                await message.edit(embed=embed)
             
             # Get the RadioCog instance if available
-            radio_cog = None
-            for cog in self.bot.cogs.values():
-                if cog.__class__.__name__ == "RadioCog":
-                    radio_cog = cog
-                    break
+            radio_cog = self.bot.get_cog("RadioCog")
             
             # Check if radio mode is enabled and we have a last played song
-            if radio_cog and radio_cog.is_radio_enabled(int(guild_id)):
-                print("Radio mode is enabled, looking for similar songs")
+            if radio_cog and hasattr(radio_cog, 'is_radio_enabled') and radio_cog.is_radio_enabled(int(guild_id)):
+                logger.debug("Radio mode is enabled, looking for similar songs")
                 last_played = self.get_last_played(guild_id)
                 
                 if last_played:
                     original_query, title = last_played
-                    print(f"Using last played song for radio: {title} (query: {original_query})")
+                    logger.debug(f"Using last played song for radio: {title}")
                     
-                    # Call RadioCog's method to add similar songs based on the last played song
-                    similar_songs = await radio_cog.add_similar_songs_to_queue(original_query, int(guild_id), interaction.channel)
-                    
-                    # If we found similar songs, refresh our queue reference
-                    if similar_songs:
-                        queue = self.song_queues.get(guild_id, deque())
-                        print(f"Radio added {len(similar_songs)} songs, new queue length: {len(queue)}")
+                    # Call RadioCog's method to add similar songs
+                    if hasattr(radio_cog, 'add_similar_songs_to_queue'):
+                        similar_songs = await radio_cog.add_similar_songs_to_queue(
+                            original_query, int(guild_id), channel)
+                        
+                        # If we found similar songs, refresh our queue reference
+                        if similar_songs:
+                            queue = self.song_queues.get(guild_id, deque())
+                            logger.debug(f"Radio added {len(similar_songs)} songs, new queue length: {len(queue)}")
             
             # If queue is still empty, disconnect
             if not queue and voice_client.is_connected():
-                print("Queue still empty after radio check, disconnecting")
+                logger.debug("Queue still empty after radio check, disconnecting")
                 await voice_client.disconnect()
-                await interaction.channel.send("Queue finished, disconnecting.")
+                
+                if message:
+                    embed = discord.Embed(
+                        title="Queue Finished",
+                        description="No more songs in queue. Disconnected from voice channel.",
+                        color=discord.Color.gold()
+                    )
+                    await message.edit(embed=embed)
+                else:
+                    await channel.send("Queue finished, disconnecting.")
                 return
 
         # Get the next song
+        if not queue:
+            logger.warning("Attempted to play next song but queue is empty")
+            return
+            
         original_query, title = queue.popleft()
-        print(f"Popped song from queue: {title}")
+        logger.debug(f"Popped song from queue: {title}")
         
         # Store as last played for radio mode reference
         # IMPORTANT: We store the ORIGINAL query, not the processed URL
         self.last_played[guild_id] = (original_query, title)
         
-        # Get playable URL with more detailed error handling
+        # Get playable URL
         try:
-            print(f"Getting playable URL for {title}")
+            logger.debug(f"Getting playable URL for {title}")
+            if message:
+                loading_embed = discord.Embed(
+                    title="Loading Song",
+                    description=f"Preparing to play **{title}**...",
+                    color=discord.Color.blue()
+                )
+                try:
+                    await message.edit(embed=loading_embed)
+                except discord.HTTPException:
+                    pass
+                
             url, _ = await self.get_song_url(original_query)
             if not url:
-                print(f"Failed to get URL for {title}")
-                await interaction.channel.send(f"Failed to get playable URL for: {title}")
+                logger.warning(f"Failed to get URL for {title}")
+                
+                if message:
+                    error_embed = discord.Embed(
+                        title="Playback Error",
+                        description=f"Failed to get playable URL for: **{title}**\nSkipping to next song...",
+                        color=discord.Color.red()
+                    )
+                    await message.edit(embed=error_embed)
+                else:
+                    await channel.send(f"Failed to get playable URL for: {title}")
+                    
                 # Try the next song
                 if queue:
-                    asyncio.create_task(self.play_next_song(guild_id, interaction))
+                    asyncio.create_task(self.play_next_song(guild_id, channel, message))
                 return
-            print(f"Successfully got URL for {title}")
+                
+            logger.debug(f"Successfully got URL for {title}")
             
             # Define the callback function for when the song finishes
-            def after_callback(error):
-                if error:
-                    print(f"Player error: {error}")
-                
-                # Schedule the next song to play
-                coro = self.play_next_song(guild_id, interaction)
-                fut = asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
-                try:
-                    fut.result()
-                except Exception as e:
-                    print(f"Error in after_callback: {e}")
+            after_callback = self.create_after_callback(guild_id, channel, message)
             
             # Play the song
             success = await self.play_audio(
@@ -245,23 +550,43 @@ class MusicCog(commands.Cog):
                 url, 
                 title,
                 guild_id, 
-                interaction.channel, 
-                after_callback
+                channel, 
+                after_callback,
+                message
             )
             
             if not success:
-                print(f"Failed to play {title}, trying next song")
+                logger.warning(f"Failed to play {title}, trying next song")
                 # Try the next song
                 if queue:
-                    asyncio.create_task(self.play_next_song(guild_id, interaction))
+                    asyncio.create_task(self.play_next_song(guild_id, channel, message))
                 
         except Exception as url_error:
-            print(f"Error getting URL: {url_error}")
-            await interaction.channel.send(f"Error retrieving playable URL: {url_error}")
+            logger.error(f"Error getting URL: {url_error}")
+            
+            if message:
+                error_embed = discord.Embed(
+                    title="Playback Error",
+                    description=f"Error retrieving playable URL: {url_error}\nSkipping to next song...",
+                    color=discord.Color.red()
+                )
+                await message.edit(embed=error_embed)
+            else:
+                await channel.send(f"Error retrieving playable URL: {url_error}")
+                
             if queue:
-                asyncio.create_task(self.play_next_song(guild_id, interaction))
+                asyncio.create_task(self.play_next_song(guild_id, channel, message))
             return
     
-async def setup(bot: commands.Bot):
-    await bot.add_cog(MusicCog(bot))
-    print("MusicCog loaded!")
+async def setup(bot: commands.Bot, config=None):
+    """
+    Setup function to register the cog with the bot.
+    
+    Args:
+        bot: The Discord bot instance
+        config: Optional configuration object
+    """
+    cog = MusicCog(bot, config)
+    await bot.add_cog(cog)
+    logger.info("MusicCog loaded!")
+    return cog
