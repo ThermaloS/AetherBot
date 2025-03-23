@@ -6,7 +6,7 @@ import asyncio
 import sys
 import logging
 import traceback
-from typing import Optional, Type, Any, Callable, Coroutine
+from typing import Optional, Type, Any, Callable
 
 # UTILITY IMPORTS
 from bin.utils.config import BotConfig
@@ -15,8 +15,16 @@ from bin.utils.logging_setup import setup_logging
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+APPLICATION_ID = os.getenv("APPLICATION_ID")
+OWNER_ID = os.getenv("OWNER_ID")
 if not TOKEN:
     print("ERROR: DISCORD_TOKEN environment variable not set!")
+    sys.exit(1)
+if not APPLICATION_ID:
+    print("ERROR: APPLICATION_ID environment variable not set!")
+    sys.exit(1)
+if not OWNER_ID:
+    print("ERROR: OWNER_ID environment variable not set!")
     sys.exit(1)
 
 # Initialize configuration and logging
@@ -30,7 +38,8 @@ intents.members = True
 intents.voice_states = True
 
 # Bot Initialization
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, application_id=int(APPLICATION_ID))
+bot.owner_id = int(OWNER_ID)
 
 @bot.event
 async def on_ready():
@@ -97,65 +106,6 @@ async def load_cog(
 async def setup_cogs():
     """Load all cogs with proper dependency injection."""
     logger.info("Setting up cogs...")
-    
-    # Import cog classes here to avoid circular imports
-    # Core services
-    from bin.services.youtube_service import YouTubeService
-    youtube_service = YouTubeService(config)
-    
-    # Music system
-    try:
-        from bin.cogs.music.music_cog import MusicCog
-        from bin.cogs.music.commands.music_general_controls import GeneralMusicControls
-        from bin.cogs.music.commands.music_play_commands import AddSongs
-        from bin.cogs.music.commands.music_elevated_commands import ElevatedMusicCommands
-        # Updated import path for RadioCog
-        from bin.cogs.music.radio.radio_cog import RadioCog
-        from bin.cogs.music.radio.radio_commands import RadioCommands, setup as radio_commands_setup
-        
-        # Load MusicCog first as a dependency for other music cogs
-        music_cog = await load_cog(bot, MusicCog, config)
-        if not music_cog:
-            logger.error("Failed to load core MusicCog, skipping related music cogs")
-            return
-        
-        # Try to load music command cogs with proper error handling for command conflicts
-        try:
-            await load_cog(bot, GeneralMusicControls, music_cog)
-        except Exception as e:
-            logger.warning(f"Warning when loading GeneralMusicControls: {e}")
-            # Continue with other cogs even if this one had an issue
-        
-        await load_cog(bot, AddSongs, music_cog)
-        await load_cog(bot, ElevatedMusicCommands, music_cog)
-        
-        # Load RadioCog with dependencies
-        try:
-            # First try using the class method
-            try:
-                await RadioCog.setup(bot, music_cog, config)
-            except Exception as setup_error:
-                logger.warning(f"Could not use RadioCog.setup: {setup_error}")
-                radio_cog = RadioCog(bot, music_cog, config)
-                await bot.add_cog(radio_cog)
-                await radio_cog.setup_components()
-                logger.info("RadioCog loaded successfully (fallback method)")
-                
-                # Direct registration of RadioCommands as fallback
-                radio_core = radio_cog.radio_core
-                await radio_commands_setup(bot, radio_core)
-                
-        except Exception as radio_error:
-            logger.error(f"Error loading RadioCog: {radio_error}")
-        
-        # Force sync of all commands
-        await bot.tree.sync()
-        logger.info("All commands synced after music system setup")
-        
-        logger.info("Music system loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to set up music system: {e}")
-        logger.debug(traceback.format_exc())
     
     # Utility and moderation cogs
     try:
