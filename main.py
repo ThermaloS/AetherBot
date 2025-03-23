@@ -4,9 +4,8 @@ from dotenv import load_dotenv
 import os
 import asyncio
 import sys
-import logging
 import traceback
-from typing import Optional, Type, Any, Callable
+from typing import Optional, Type, Any
 
 # UTILITY IMPORTS
 from bin.utils.config import BotConfig
@@ -19,9 +18,6 @@ APPLICATION_ID = os.getenv("APPLICATION_ID")
 OWNER_ID = os.getenv("OWNER_ID")
 if not TOKEN:
     print("ERROR: DISCORD_TOKEN environment variable not set!")
-    sys.exit(1)
-if not APPLICATION_ID:
-    print("ERROR: APPLICATION_ID environment variable not set!")
     sys.exit(1)
 if not OWNER_ID:
     print("ERROR: OWNER_ID environment variable not set!")
@@ -38,7 +34,7 @@ intents.members = True
 intents.voice_states = True
 
 # Bot Initialization
-bot = commands.Bot(command_prefix="!", intents=intents, application_id=int(APPLICATION_ID))
+bot = commands.Bot(command_prefix="!", intents=intents)
 bot.owner_id = int(OWNER_ID)
 
 @bot.event
