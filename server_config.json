@@ -2,5 +2,24 @@
     "1185768543787163710": {
         "welcome_channel_id": 1185768543787163713,
         "welcome_channel_name": "general"
+    },
+    "1344136322994143283": {
+        "welcome_channel_id": 1344136323476357139,
+        "welcome_channel_name": "welcome",
+        "welcome_role_id": 1344136322994143284,
+        "welcome_role_name": "Fans"
+    },
+    "1343765915241807964": {
+        "welcome_channel_id": 1343765915589677065,
+        "welcome_channel_name": "welcome",
+        "welcome_role_id": 1343765915241807965,
+        "welcome_role_name": "Spartans"
+    },
+    "1341944895488917556": {
+        "welcome_channel_id": 1350960997216817203,
+        "welcome_channel_name": "welcome",
+        "welcome_role_id": 1341944895488917557,
+        "welcome_role_name": "MEMBERS",
+        "welcome_message": "WELCOME TO THE CHICAGO TITANS"
     }
 }
